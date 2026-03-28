@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="it">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SAFE-Shop</title>
+
+  <link rel="stylesheet" href="index.css">
+  <link rel="stylesheet" href="index.js">
+</head>
+
+<body>
+
+  <!-- HEADER -->
+  <header>
+    <div class="header-inner">
+
+      <div class="logo">
+        <span class="logo-text">SAFE<span>-Shop</span></span>
+      </div>
+
+      <!-- <div class="badge-didattico">
+        ● Strumento didattico
+      </div> -->
+
+    </div>
+  </header>
+
+  <!-- HERO -->
+  <section class="hero">
+
+    <h1>Verifica l'affidabilità di un sito e-commerce</h1>
+
+    <p>
+      Inserisci l'URL del negozio online che vuoi analizzare.
+      SAFE-Shop analizza diversi indicatori per stimare il livello di affidabilità.
+    </p>
+
+    <div class="search-bar">
+
+      <div class="input-wrap">
+        <input id="txtUrl" type="text" placeholder="es. amazon.it">
+      </div>
+
+      <button id="btnAnalizza" class="btn-analizza">
+        Analizza
+      </button>
+
+    </div>
+
+  </section>
+
+  <!-- MAIN -->
+  <main class="main">
+
+    <!-- RISULTATO -->
+    <div class="result-card">
+
+      <div class="result-card-header">
+        <span>Risultato</span>
+      </div>
+
+      <div class="result-card-body">
+
+        <div class="score-circle">
+          <span id="lblPercentuale">--%</span>
+        </div>
+
+        <p id="lblLivello" class="result-level">
+          In attesa di analisi
+        </p>
+
+        <div class="legend">
+          <div class="legend-item">
+            <span class="legend-dot" style="background: var(--green);"></span>
+            Affidabile ≥ 70%
+          </div>
+
+          <div class="legend-item">
+            <span class="legend-dot" style="background: var(--yellow);"></span>
+            Medio 40–69%
+          </div>
+
+          <div class="legend-item">
+            <span class="legend-dot" style="background: var(--red);"></span>
+            Rischioso < 40%
+          </div>
+        </div>
+
+      </div>
+
+    </div>
+
+    <!-- DETTAGLI -->
+    <p class="section-label">Dettagli Analisi</p>
+
+    <div class="details-grid">
+
+      <div class="detail-card">
+        <p class="detail-label">Età Dominio</p>
+        <strong id="dominio" class="detail-value">--</strong>
+        <p class="detail-desc">Anzianità del dominio</p>
+      </div>
+
+      <div class="detail-card">
+        <p class="detail-label">HTTPS</p>
+        <strong id="https" class="detail-value">--</strong>
+        <p class="detail-desc">Connessione sicura</p>
+      </div>
+
+      <div class="detail-card">
+        <p class="detail-label">Recensioni</p>
+        <strong id="recensioni" class="detail-value">--</strong>
+        <p class="detail-desc">Valutazione utenti</p>
+      </div>
+
+      <div class="detail-card">
+        <p class="detail-label">Reputazione</p>
+        <strong id="reputazione" class="detail-value">--</strong>
+        <p class="detail-desc">Indice di fiducia</p>
+      </div>
+
+    </div>
+
+  </main>
+
+  <!-- FOOTER -->
+  <footer>
+
+    <div class="disclaimer">
+      <p>
+        <strong>Disclaimer:</strong>
+        SAFE-Shop fornisce una stima indicativa basata su dati pubblici.
+        Non garantisce l'assenza di truffe.
+      </p>
+    </div>
+
+    <div class="footer-bottom">
+      <span>© 2025 SAFE-Shop</span>
+      <span>Progetto didattico</span>
+    </div>
+
+  </footer>
+
+</body>
+
+</html>
