@@ -1,25 +1,19 @@
-/* ============================================================
-       VARIABILI – cambia qui per personalizzare i colori
-    ============================================================ */
     :root {
-      --navy:       #0f172a;   /* sfondo header / hero */
-      --navy-mid:   #1e2d4a;   /* card interna header */
-      --navy-card:  #1a2744;   /* bordi / sfondi secondari */
-      --teal:       #2dd4bf;   /* colore primario / accento */
-      --green:      #4ade80;   /* livello affidabile */
-      --yellow:     #facc15;   /* livello medio */
-      --red:        #f87171;   /* livello rischioso */
-      --bg:         #f3f6fb;   /* sfondo pagina */
-      --card-bg:    #ffffff;   /* sfondo card bianche */
-      --text:       #1e293b;   /* testo principale */
-      --text-light: #64748b;   /* testo secondario */
-      --border:     #e2e8f0;   /* bordi chiari */
-      --radius:     16px;      /* arrotondamento card */
+      --navy:       #0f172a; 
+      --navy-mid:   #1e2d4a; 
+      --navy-card:  #1a2744; 
+      --teal:       #2dd4bf; 
+      --green:      #4ade80;
+      --yellow:     #facc15;
+      --red:        #f87171; 
+      --bg:         #f3f6fb;  
+      --card-bg:    #ffffff;  
+      --text:       #1e293b;  
+      --text-light: #64748b;  
+      --border:     #e2e8f0;   
+      --radius:     16px;     
     }
 
-    /* ============================================================
-       RESET BASE
-    ============================================================ */
     *, *::before, *::after {
       box-sizing: border-box;
       margin: 0;
@@ -38,9 +32,6 @@
       font-family: 'Space Grotesk', sans-serif;
     }
 
-    /* ============================================================
-       HEADER
-    ============================================================ */
     header {
       background: var(--navy);
       padding: 16px 24px;
@@ -98,9 +89,6 @@
       flex-shrink: 0;
     }
 
-    /* ============================================================
-       HERO
-    ============================================================ */
     .hero {
       background: var(--navy);
       padding: 60px 24px 72px;
@@ -142,7 +130,6 @@
       margin: 0 auto 36px;
     }
 
-    /* Search bar */
     .search-bar {
       display: flex;
       flex-direction: column;
@@ -214,18 +201,12 @@
       height: 18px;
     }
 
-    /* ============================================================
-       MAIN CONTENT
-    ============================================================ */
     .main {
       max-width: 960px;
       margin: 0 auto;
       padding: 32px 24px 0;
     }
 
-    /* ============================================================
-       RESULT CARD
-    ============================================================ */
     .result-card {
       background: var(--card-bg);
       border: 1px solid var(--border);
@@ -262,7 +243,6 @@
       text-align: center;
     }
 
-    /* Circular score */
     .score-circle {
       display: inline-flex;
       align-items: center;
@@ -288,7 +268,6 @@
       color: var(--text-light);
     }
 
-    /* Legend */
     .legend {
       display: flex;
       flex-wrap: wrap;
@@ -317,9 +296,6 @@
       color: var(--text);
     }
 
-    /* ============================================================
-       DETAILS GRID
-    ============================================================ */
     .section-label {
       font-size: 11px;
       font-weight: 600;
@@ -383,9 +359,6 @@
       line-height: 1.5;
     }
 
-    /* ============================================================
-       FOOTER / DISCLAIMER
-    ============================================================ */
     .disclaimer {
       display: flex;
       align-items: flex-start;
@@ -435,9 +408,6 @@
       color: #f87171;
     }
 
-    /* ============================================================
-       RESPONSIVE – schermi grandi (tablet/desktop)
-    ============================================================ */
     @media (min-width: 600px) {
       .search-bar {
         flex-direction: row;
@@ -453,13 +423,9 @@
       }
 
       .badge-didattico {
-        display: flex; /* già visibile su mobile, ma lo confermiamo */
+        display: flex; 
       }
     }
-
-    /* ============================================================
-       NASCONDE il badge su schermi molto piccoli
-    ============================================================ */
     @media (max-width: 399px) {
       .badge-didattico {
         display: none;
