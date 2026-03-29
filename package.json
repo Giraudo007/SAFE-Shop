@@ -8,7 +8,7 @@
     "dispatching"
   ],
   "license": "ISC",
-  "author": "Lorenzo",
+  "author": "Francesco",
   "type": "commonjs",
   "main": "server.js",
   "scripts": {
