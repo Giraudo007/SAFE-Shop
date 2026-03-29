@@ -1,78 +1,77 @@
-// ===============================
-// SAFE-SHOP - LOGICA PRINCIPALE
-// ===============================
+"use strict"
 
-// quando clicchi il bottone
-document.getElementById("btnAnalizza").addEventListener("click", analizza);
+window.onload = function () {
 
+    let btn = document.getElementById("btnAnalizza");
+    btn.addEventListener("click", analizza);
+}
 
-// ===============================
-// FUNZIONE PRINCIPALE
-// ===============================
-function analizza() {
+async function analizza() {
 
-    // prendo l'URL inserito
     let url = document.getElementById("txtUrl").value;
 
-    // controllo base (se vuoto)
-    if (url.trim() == "") {
-        alert("Inserisci un URL!");
+    if (!url) {
+        alert("Inserisci un URL");
         return;
     }
 
-    // ---------------------------
-    // DATI SIMULATI (mock)
-    // ---------------------------
-    let dati = generaDatiFinti(url);
+    // let risposta = await inviaRichiesta("POST", "/analizza", { url });
 
-    // ---------------------------
-    // CALCOLO PUNTEGGIO
-    // ---------------------------
-    let punteggio = calcolaPunteggio(dati);
+    // if (!risposta) return;
+    let dati = verificaUrl(url)
 
-    // ---------------------------
-    // AGGIORNA UI
-    // ---------------------------
+    let punteggio = calcolaPunteggio(dati)
+
     aggiornaRisultato(punteggio);
     aggiornaDettagli(dati);
 }
 
 
 
-// ===============================
-// GENERA DATI RANDOM (SIMULAZIONE)
-// ===============================
-function generaDatiFinti(url) {
+function verificaUrl(url) {
+    const https = url.startsWith("https://") ? 100 : 0;
+
+    let dominio = 0;
+    try {
+        let hostname = new URL(url).hostname;
+        let domainLength = hostname.replace(/^www\./, '').length;
+        dominio = Math.max(100 - domainLength * 2, 10);
+    } catch {
+        dominio = 10;
+    }
+
+    let recensioni = /shop|store|market/.test(url.toLowerCase()) ? 80 : 50;
+
+    let reputazione = /free|hack|download/.test(url.toLowerCase()) ? 20 : 90;
 
     return {
-        dominio: random(20, 100),         // età dominio
-        https: Math.random() > 0.3 ? 100 : 0,  // più probabile sicuro
-        recensioni: random(30, 100),
-        reputazione: random(20, 100)
+        dominio,
+        https,
+        recensioni,
+        reputazione
     };
 }
 
 
 
-// ===============================
-// CALCOLO PUNTEGGIO PESATO
-// ===============================
 function calcolaPunteggio(dati) {
+    const dominio = Math.min(Math.max(dati.dominio, 0), 100);
+    const https = Math.min(Math.max(dati.https, 0), 100);
+    const recensioni = Math.min(Math.max(dati.recensioni, 0), 100);
+    const reputazione = Math.min(Math.max(dati.reputazione, 0), 100);
 
-    let punteggio =
-        dati.dominio * 0.30 +
-        dati.https * 0.15 +
-        dati.recensioni * 0.25 +
-        dati.reputazione * 0.30;
+    const punteggio = 
+        dominio * 0.30 +
+        https * 0.15 +
+        recensioni * 0.25 +
+        reputazione * 0.30;
 
     return Math.round(punteggio);
 }
 
 
 
-// ===============================
 // AGGIORNA RISULTATO PRINCIPALE
-// ===============================
 function aggiornaRisultato(punteggio) {
 
     let lblPercentuale = document.getElementById("lblPercentuale");
@@ -99,15 +98,12 @@ function aggiornaRisultato(punteggio) {
 
     lblLivello.innerText = livello;
 
-    // colore del cerchio
     lblPercentuale.style.color = colore;
 }
 
 
 
-// ===============================
 // AGGIORNA DETTAGLI
-// ===============================
 function aggiornaDettagli(dati) {
 
     document.getElementById("dominio").innerText = dati.dominio;
@@ -124,9 +120,6 @@ function aggiornaDettagli(dati) {
 
 
 
-// ===============================
-// FUNZIONE RANDOM UTILE
-// ===============================
 function random(min, max) {
     return Math.floor(Math.random() * (max - min + 1)) + min;
 }
