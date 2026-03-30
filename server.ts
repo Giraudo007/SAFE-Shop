@@ -3,9 +3,10 @@ import http from "http";
 import fs from "fs";
 import express from "express";
 import dotenv from "dotenv";
-import { MongoClient, ObjectId } from "mongodb";
+import { MongoClient } from "mongodb";
 import queryStringParser from "./queryStringParser";
 import cors from "cors";
+import dns from "dns/promises";
 
 //B. configurazioni
 //riconosce i tipi automaticamente (non è any) -> grazie @types/node in devDependencies (sviluppo)
@@ -72,158 +73,146 @@ app.use("/", cors(corsOptions));
 
 
 //E. gestione delle root dinamiche
-app.get("/api/getCollections", async function (req, res, next) {
-    const client = new MongoClient(connStr!);
+app.post("/api/analizza", async (req: any, res) => {
 
-    await client.connect().catch(err => {
-        res.status(503).send("Errore di connessione al DBMS")
+    let url = req.body.url;
+
+    if (!url) {
+        res.status(400).send("URL mancante");
         return;
-    });
+    }
 
-    const db = client.db(dbName);
+    try {
+        const parsed = new URL(url);
+        const hostname = parsed.hostname;
 
-    //restituisce elenco delle collezioni del db (formato JSON)
-    const data = await db.listCollections().toArray().catch(err => res.status(500).send("Errore lettura collezioni: " + err));
+        const https = url.startsWith("https://") ? 100 : 0;
 
-    res.send(data);
+        // 🌐 DNS (IP)
+        let ip = "";
+        try {
+            const result = await dns.lookup(hostname);
+            ip = result.address;
+        } catch {
+            ip = "non trovato";
+        }
 
-    client.close();
+        // 🧠 ETA DOMINIO (FAKE MA INTELLIGENTE per ora)
+        let eta = 50;
+
+        if (hostname.includes("amazon") || hostname.includes("google"))
+            eta = 90;
+        else if (hostname.length < 6)
+            eta = 30;
+        else
+            eta = 60;
+
+
+        let dominio = 80;
+        let recensioni = 50;
+        let reputazione = 60;
+
+        // 👉 puoi incollare qui la tua funzione verificaUrl
+        // oppure semplificare
+        const risultato = vericaUrl(url);
+
+        res.send({
+            dominio: risultato.dominio,
+            https: risultato.https,
+            recensioni: risultato.recensioni,
+            reputazione: risultato.reputazione,
+            eta,
+            ip
+        });
+
+    } catch (err) {
+        res.status(400).send("URL non valido");
+    }
 });
 
-//con filtri
-app.get("/api/:collection", async (req: any, res, next) => {
-    const selectedCollection = req.params.collection;
-    const filters = req["parsedQuery"];
+function vericaUrl(url: string) {
+    const https = url.startsWith("https://") ? 100 : 0;
 
-    const client = new MongoClient(connStr!);
-    await client.connect().catch(err => {
-        res.status(503).send("Errore di connessione al DBMS")
-        return;
-    });
 
-    const collection = client.db(dbName).collection(selectedCollection);
+    let dominio = 80;
 
-    const cmd = collection.find(filters).toArray();
+    try {
+        const parsed = new URL(url);
+        const hostname = parsed.hostname.toLowerCase();
+        const parts = hostname.split(".");
+        const sld = parts[parts.length - 2] || "";
 
-    //restituisce elenco delle collezioni del db (formato JSON)
-    const data = await cmd.catch(err => res.status(500).send("Errore di connessione al dbms: " + err));
+        const tldRischiosi = /\.(xyz|tk|top|click|gq|ml|cf|ga|pw|icu|buzz|rest|skin|monster|cyou|cc|ws|su)$/i;
+        const isIp = /^(\d{1,3}\.){3}\d{1,3}$/.test(hostname);
+        const paroleSospetteSld = /login|secure|verify|paypa|amaz0n|amaz|ebay1|account|update|confirm|banking|wallet|signin/i;
+        const trattinoMultiplo = (sld.match(/-/g) || []).length >= 2;
+        const sottodominiEccessivi = parts.length > 3 && !hostname.startsWith("www.");
+        const numereMistiLettere = /[a-z]+\d+[a-z]+|\d+[a-z]+\d+/i.test(sld);
+        const urlLungo = url.length > 100;
 
-    res.send(data);
+        if (isIp) dominio -= 50;
+        if (tldRischiosi.test(hostname)) dominio -= 10;
+        if (paroleSospetteSld.test(sld)) dominio -= 20;
+        if (numereMistiLettere) dominio -= 15;
+        if (trattinoMultiplo) dominio -= 10;
+        if (sottodominiEccessivi) dominio -= 5;
+        if (urlLungo) dominio -= 5;
+        if (/\.(gov|edu|org)$/.test(hostname)) dominio += 10;
 
-    client.close();
-})
+        dominio = Math.min(Math.max(dominio, 0), 100);
 
-app.get("/api/:collection/:id", async (req, res, next) => {
-    const selectedCollection = req.params.collection;
-    const id = req.params.id;
+    } catch {
+        dominio = 10;
+    }
 
-    const client = new MongoClient(connStr!);
-    await client.connect().catch(err => {
-        res.status(503).send("Errore di connessione al DBMS")
-        return;
-    });
+    let recensioni = 50;
 
-    const collection = client.db(dbName).collection(selectedCollection);
+    try {
+        const parsed = new URL(url);
+        const hostname = parsed.hostname.toLowerCase().replace(/^www\./, "");
+        // const dominioSemplice = hostname.split(".")[0].length <= 8 && !/[-\d]/.test(hostname.split(".")[0]);
+        const pathProfondo = parsed.pathname.split("/").filter(Boolean).length >= 2;
+        const troppiParam = Array.from(parsed.searchParams.keys()).length > 4;
 
-    const cmd = collection.findOne({ "_id": new ObjectId(id) });
+        // if (dominioSemplice) recensioni += 25;
+        if (pathProfondo) recensioni += 10;
+        if (troppiParam) recensioni -= 15;
 
-    //restituisce elenco delle collezioni del db (formato JSON)
-    const data = await cmd.catch(err => res.status(500).send("Errore di connessione al dbms: " + err));
+        recensioni = Math.min(Math.max(recensioni, 0), 100);
 
-    res.send(data);
+    } catch {
+        recensioni = 20;
+    }
 
-    client.close();
-})
+    // REPUTAZIONE / INDICE DI FIDUCIA
+    let reputazione = 60;
 
-app.post("/api/:collection/", async (req, res, next) => {
-    const selectedCollection = req.params.collection;
-    const newRecord = req.body;
+    try {
+        const parsed = new URL(url);
+        const fullUrl = url.toLowerCase();
+        const pathname = parsed.pathname.toLowerCase();
 
-    const client = new MongoClient(connStr!);
-    await client.connect().catch(err => {
-        res.status(503).send("Errore di connessione al DBMS")
-        return;
-    });
+        const paroleRosse = /free|hack|crack|keygen|warez|pirat|cheat|nulled|phish|malware/i;
+        const paroleArancioni = /download|gift|prize|winner|reward|promo|discount/i;
+        const redirect = /redirect|redir|goto|out\.php|click\.php/i;
+        const fileEseguibile = /\.(exe|bat|msi|dmg|apk|zip|rar|7z)$/i;
+        const encodingSospetto = (fullUrl.match(/%[0-9a-f]{2}/gi) || []).length > 5;
 
-    const collection = client.db(dbName).collection(selectedCollection);
+        if (https == 100) reputazione += 20;
+        if (paroleRosse.test(fullUrl)) reputazione -= 35;
+        if (paroleArancioni.test(pathname)) reputazione -= 15;
+        if (redirect.test(pathname)) reputazione -= 20;
+        if (fileEseguibile.test(pathname)) reputazione -= 25;
+        if (encodingSospetto) reputazione -= 15;
 
-    const cmd = collection.insertOne(newRecord);
+        reputazione = Math.min(Math.max(reputazione, 0), 100);
 
-    //restituisce elenco delle collezioni del db (formato JSON)
-    const data = await cmd.catch(err => res.status(500).send("Errore di connessione al dbms: " + err));
+    } catch {
+        reputazione = 10;
+    }
 
-    res.send(data);
-
-    client.close();
-})
-
-app.patch("/api/:collection/:id", async (req, res, next) => {
-    const selectedCollection = req.params.collection;
-    const id = req.params.id;
-    const action = req.body;
-
-    const client = new MongoClient(connStr!);
-    await client.connect().catch(err => {
-        res.status(503).send("Errore di connessione al DBMS")
-        return;
-    });
-
-    const collection = client.db(dbName).collection(selectedCollection);
-
-    const cmd = collection.updateOne({ "_id": new ObjectId(id) }, { "$set": action });
-
-    //restituisce elenco delle collezioni del db (formato JSON)
-    const data = await cmd.catch(err => res.status(500).send("Errore di connessione al dbms: " + err));
-
-    res.send(data);
-
-    client.close();
-})
-
-app.delete("/api/:collection/:id", async (req, res, next) => {
-    const selectedCollection = req.params.collection;
-    const _id = req.params.id;
-
-    const client = new MongoClient(connStr!);
-    await client.connect().catch(err => {
-        res.status(503).send("Errore di connessione al DBMS")
-        return;
-    });
-
-    const collection = client.db(dbName).collection(selectedCollection);
-
-    const cmd = collection.deleteOne({ "_id": new ObjectId(_id) });
-
-    //restituisce elenco delle collezioni del db (formato JSON)
-    const data = await cmd.catch(err => res.status(500).send("Errore di connessione al dbms: " + err));
-
-    res.send(data);
-
-    client.close();
-})
-
-app.delete("/api/:collection", async (req: any, res, next) => {
-    const selectedCollection = req.params.collection;
-    const filters = req["parsedQuery"];
-
-    const client = new MongoClient(connStr!);
-    await client.connect().catch(err => {
-        res.status(503).send("Errore di connessione al DBMS")
-        return;
-    });
-
-    const collection = client.db(dbName).collection(selectedCollection);
-
-    const cmd = collection.deleteMany(filters);
-
-    //restituisce elenco delle collezioni del db (formato JSON)
-    const data = await cmd.catch(err => res.status(500).send("Errore di connessione al dbms: " + err));
-
-    res.send(data);
-
-    client.close();
-})
-
+    return { dominio, https, recensioni, reputazione };
+}
 //F. default root e gestione errori
 app.use(function (req, res) {
     if (req.originalUrl.startsWith("/api/"))

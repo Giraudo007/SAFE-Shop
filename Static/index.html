@@ -6,6 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>SAFE-Shop</title>
 
+  <script src="./libreria.js"></script>
   <link rel="stylesheet" href="index.css">
 </head>
 
@@ -80,44 +81,49 @@
 
           <div class="legend-item">
             <span class="legend-dot" style="background: var(--red);"></span>
-            Rischioso < 40%
+            Rischioso < 40% </div>
           </div>
+
         </div>
 
       </div>
 
-    </div>
+      <!-- DETTAGLI -->
+      <p class="section-label">Dettagli Analisi</p>
 
-    <!-- DETTAGLI -->
-    <p class="section-label">Dettagli Analisi</p>
+      <div class="details-grid">
 
-    <div class="details-grid">
+        <div class="detail-card">
+          <p class="detail-label">Età Dominio</p>
+          <strong id="eta" class="detail-value">--</strong>
+          <p class="detail-desc">Anzianità del dominio</p>
+        </div>
 
-      <div class="detail-card">
-        <p class="detail-label">Età Dominio</p>
-        <strong id="dominio" class="detail-value">--</strong>
-        <p class="detail-desc">Anzianità del dominio</p>
+        <div class="detail-card">
+          <p class="detail-label">Dominio</p>
+          <strong id="dominio" class="detail-value">--</strong>
+          <p class="detail-desc">Analisi del dominio</p>
+        </div>
+
+        <div class="detail-card">
+          <p class="detail-label">HTTPS</p>
+          <strong id="https" class="detail-value">--</strong>
+          <p class="detail-desc">Connessione sicura</p>
+        </div>
+
+        <div class="detail-card">
+          <p class="detail-label">Recensioni</p>
+          <strong id="recensioni" class="detail-value">--</strong>
+          <p class="detail-desc">Popolarità apparente</p>
+        </div>
+
+        <div class="detail-card">
+          <p class="detail-label">Reputazione</p>
+          <strong id="reputazione" class="detail-value">--</strong>
+          <p class="detail-desc">Indice di fiducia</p>
+        </div>
+
       </div>
-
-      <div class="detail-card">
-        <p class="detail-label">HTTPS</p>
-        <strong id="https" class="detail-value">--</strong>
-        <p class="detail-desc">Connessione sicura</p>
-      </div>
-
-      <div class="detail-card">
-        <p class="detail-label">Recensioni</p>
-        <strong id="recensioni" class="detail-value">--</strong>
-        <p class="detail-desc">Popolarità apparente</p>
-      </div>
-
-      <div class="detail-card">
-        <p class="detail-label">Reputazione</p>
-        <strong id="reputazione" class="detail-value">--</strong>
-        <p class="detail-desc">Indice di fiducia</p>
-      </div>
-
-    </div>
 
   </main>
 
@@ -141,4 +147,5 @@
 
 </body>
 <script src="index.js"></script>
+
 </html>
