@@ -7,6 +7,7 @@ import { MongoClient } from "mongodb";
 import queryStringParser from "./queryStringParser";
 import cors from "cors";
 import dns from "dns/promises";
+import whois from "whois-json";
 
 //B. configurazioni
 //riconosce i tipi automaticamente (non è any) -> grazie @types/node in devDependencies (sviluppo)
@@ -82,39 +83,32 @@ app.post("/api/analizza", async (req: any, res) => {
         return;
     }
 
+    if (!url.startsWith("http")) {
+        url = "https://" + url;
+    }
+
     try {
         const parsed = new URL(url);
         const hostname = parsed.hostname;
 
         const https = url.startsWith("https://") ? 100 : 0;
 
-        // 🌐 DNS (IP)
-        let ip = "";
+        let ip: any = "non trovato";
+        let dnsValido = false;
+
         try {
-            const result = await dns.lookup(hostname);
-            ip = result.address;
+            const addresses = await dns.resolve4(hostname); // più affidabile per ipv4
+            if (addresses && addresses.length > 0) {
+                ip = addresses[0];
+                dnsValido = true;
+            }
         } catch {
-            ip = "non trovato";
+            dnsValido = false;
         }
 
-        // 🧠 ETA DOMINIO (FAKE MA INTELLIGENTE per ora)
-        let eta = 50;
+        const eta = await calcolaEtaDominio(hostname);
 
-        if (hostname.includes("amazon") || hostname.includes("google"))
-            eta = 90;
-        else if (hostname.length < 6)
-            eta = 30;
-        else
-            eta = 60;
-
-
-        let dominio = 80;
-        let recensioni = 50;
-        let reputazione = 60;
-
-        // 👉 puoi incollare qui la tua funzione verificaUrl
-        // oppure semplificare
-        const risultato = vericaUrl(url);
+        const risultato = verificaUrl(url);
 
         res.send({
             dominio: risultato.dominio,
@@ -130,7 +124,7 @@ app.post("/api/analizza", async (req: any, res) => {
     }
 });
 
-function vericaUrl(url: string) {
+function verificaUrl(url: string) {
     const https = url.startsWith("https://") ? 100 : 0;
 
 
@@ -213,6 +207,42 @@ function vericaUrl(url: string) {
 
     return { dominio, https, recensioni, reputazione };
 }
+
+async function calcolaEtaDominio(hostname: string): Promise<number> {
+    try {
+        const result: any = await whois(hostname);
+        console.log("WHOIS result:", result);
+
+        const data = Array.isArray(result) ? result[0] : result;
+
+        const creationDate =
+            data.creationDate ||
+            data.createdDate ||
+            data.created ||
+            data.domainCreated;
+
+        if (!creationDate) {
+            console.log("Nessuna data WHOIS trovata");
+            return 40;
+        }
+
+        const created = new Date(creationDate);
+        const now = new Date();
+
+        const anni = (now.getTime() - created.getTime()) / (1000 * 60 * 60 * 24 * 365);
+
+        if (anni >= 10) return 100;
+        if (anni >= 5) return 80;
+        if (anni >= 2) return 60;
+        if (anni >= 1) return 40;
+        return 20;
+
+    } catch (err) {
+        console.error("Errore WHOIS:", err);
+        return 50;
+    }
+}
+
 //F. default root e gestione errori
 app.use(function (req, res) {
     if (req.originalUrl.startsWith("/api/"))

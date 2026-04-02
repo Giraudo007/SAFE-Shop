@@ -19,6 +19,7 @@ async function analizza() {
 
     // if (!risposta) return;
     let dati = await inviaRichiesta("POST", "/analizza", { url });
+    if (!dati) return;
 
     let punteggio = calcolaPunteggio(dati)
 
@@ -34,12 +35,14 @@ function calcolaPunteggio(dati) {
     const https = Math.min(Math.max(dati.https, 0), 100);
     const recensioni = Math.min(Math.max(dati.recensioni, 0), 100);
     const reputazione = Math.min(Math.max(dati.reputazione, 0), 100);
+    const eta = Math.min(Math.max(dati.eta, 0), 100);
 
     const punteggio =
-        dominio * 0.30 +
+        dominio * 0.25 +
         https * 0.15 +
-        recensioni * 0.25 +
-        reputazione * 0.30;
+        recensioni * 0.20 +
+        reputazione * 0.20 +
+        eta * 0.20;
 
     return Math.round(punteggio);
 }
@@ -82,14 +85,13 @@ function aggiornaDettagli(dati) {
 
     document.getElementById("dominio").innerText = dati.dominio;
 
-    document.getElementById("https").innerText =
-        dati.https == 100 ? "Sicuro" : "Non sicuro";
+    document.getElementById("https").innerText = dati.https == 100 ? "Sicuro" : "Non sicuro";
 
-    document.getElementById("recensioni").innerText =
-        dati.recensioni;
+    document.getElementById("recensioni").innerText = dati.recensioni;
 
-    document.getElementById("reputazione").innerText =
-        dati.reputazione;
+    document.getElementById("reputazione").innerText = dati.reputazione;
+
+    document.getElementById("eta").innerText = dati.eta;
 }
 
 
