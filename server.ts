@@ -1,10 +1,7 @@
 //A. import delle librerie
-import http from "http";
-import fs from "fs";
 import express from "express";
 import dotenv from "dotenv";
-import { MongoClient } from "mongodb";
-import queryStringParser from "./queryStringParser";
+import { MongoClient, Db } from "mongodb";
 import cors from "cors";
 import dns from "dns/promises";
 import whois from "whois-json";
@@ -12,29 +9,32 @@ import axios from "axios";
 
 
 //B. configurazioni
-//riconosce i tipi automaticamente (non è any) -> grazie @types/node in devDependencies (sviluppo)
 const app = express();
-//stessa cosa -> const app: express.Express = express();
 dotenv.config({ path: ".env" });
-const connStr = process.env.connectionStringAtlas;
+const connStr = process.env.connectionStringAtlas!;
 const port = parseInt(process.env.PORT!);
-const dbName = process.env.dbName;
 let blacklist: string[] = [];
+let db: Db;
+let client: MongoClient;
 
 //C. creazione ed avvio del server HTTP
-const server: http.Server = http.createServer(app);
-let paginaErr = "";
-
-//server in ascolto sulla porta 1337
-server.listen(port, async function () {
+const server = app.listen(port, async function () {
     console.log("Server in ascolto sulla porta " + port);
 
-    fs.readFile("./static/error.html", function (err, content) { //content è una sequenza di byte
-        if (err)
-            paginaErr = "<h1>Risorsa non trovata</h1>";
-        else
-            paginaErr = content.toString();
-    })
+    try {
+        // Connessione MongoDB
+        client = new MongoClient(connStr);
+        await client.connect();
+        db = client.db("safeshop");
+        console.log("✓ MongoDB connesso");
+
+        // Creare indici
+        await db.collection("url_checks").createIndex({ hostname: 1, timestamp: -1 });
+        await db.collection("url_stats").createIndex({ hostname: 1 });
+
+    } catch (err) {
+        console.error("✗ Errore MongoDB:", err);
+    }
 
     try {
         const response = await axios.get(
@@ -43,50 +43,28 @@ server.listen(port, async function () {
 
         blacklist = response.data;
 
-        console.log("Blacklist caricata:", blacklist.length);
+        console.log("✓ Blacklist caricata:", blacklist.length);
 
     } catch (err) {
-        console.error("Errore caricamento blacklist", err);
+        console.error("✗ Errore caricamento blacklist", err);
     }
 });
 
 //D. middleware
 //middleware 1: request log
-app.use(function (req, res, next) //se si omette => come risorsa "/"
-{
+app.use(function (req, res, next) {
     console.log("Ricevuta richiesta: " + req.method + ": " + req.originalUrl);
-    next(); //passa al middleware successivo
+    next();
 });
 
 //middleware 2: gestione delle risorse statiche
 app.use(express.static("./static"));
 
 //middleware 3: gestione dei parametri post
-app.use(express.json({ "limit": "5mb" })); //i parametri post sono restituiti in req.body
-//i parametri get invece sono restituiti come json in req.query
+app.use(express.json({ "limit": "5mb" }));
 
-//middleware 4: parsing dei parametri GET
-app.use("/", queryStringParser);
-
-//middleware 5: log dei parametri
-app.use((req: any, res, next) => {
-    if (req.body && Object.keys(req.body).length > 0)
-        console.log("   Parametri body: " + JSON.stringify(req.body));
-
-    if (req["parsedQuery"] && Object.keys(req["parsedQuery"]).length > 0)
-        console.log("   Parametri query: " + JSON.stringify(req["parsedQuery"]));
-
-    next();
-});
-
-//middleware 6: Vincoli CORS (controlli lato server che consentono di accettare richieste anche da fuori dal dominio -> cioè diverso dal server da cui arrivano le pagine)
-const corsOptions = {
-    origin: function (origin: any, callback: any) {
-        return callback(null, true);
-    },
-    credentials: true
-};
-app.use("/", cors(corsOptions));
+//middleware 4: CORS
+app.use(cors());
 
 
 //E. gestione delle root dinamiche
@@ -107,19 +85,15 @@ app.post("/api/analizza", async (req: any, res) => {
         const parsed = new URL(url);
         const hostname = parsed.hostname;
 
-        const https = url.startsWith("https://") ? 100 : 0;
-
         let ip: any = "non trovato";
-        let dnsValido = false;
 
         try {
-            const addresses = await dns.resolve4(hostname); // più affidabile per ipv4
+            const addresses = await dns.resolve4(hostname);
             if (addresses && addresses.length > 0) {
                 ip = addresses[0];
-                dnsValido = true;
             }
         } catch {
-            dnsValido = false;
+            // DNS non trovato
         }
 
         const cleanHost = hostname
@@ -131,7 +105,7 @@ app.post("/api/analizza", async (req: any, res) => {
         );
 
         if (dominioBlacklist) {
-            res.send({
+            const risultato = {
                 dominio: 0,
                 https: 0,
                 recensioni: 0,
@@ -139,14 +113,99 @@ app.post("/api/analizza", async (req: any, res) => {
                 eta: 0,
                 ip,
                 blacklist: true
+            };
+
+            // Salva in DB
+            if (db) {
+                await db.collection("url_checks").insertOne({
+                    url,
+                    hostname,
+                    timestamp: new Date(),
+                    score: 0,
+                    results: risultato,
+                    userFingerprint: "user_" + new Date().getTime()
+                });
+
+                // Aggiorna contatore
+                await db.collection("url_stats").updateOne(
+                    { hostname },
+                    {
+                        $inc: { checkCount: 1 },
+                        $set: {
+                            lastCheck: new Date(),
+                            riskLevel: "HIGH"
+                        },
+                        $setOnInsert: {
+                            url,
+                            hostname,
+                            firstCheck: new Date(),
+                            avgScore: 0
+                        }
+                    },
+                    { upsert: true }
+                );
+            }
+
+            res.send({
+                ...risultato,
+                stats: {
+                    checkCount: 1,
+                    firstCheck: new Date(),
+                    lastCheck: new Date(),
+                    riskLevel: "HIGH"
+                }
             });
 
             return;
         }
 
         const eta = await calcolaEtaDominio(hostname);
-
         const risultato = verificaUrl(url);
+        const punteggio = calcolaPunteggio(risultato, eta);
+
+        // Salva in DB
+        if (db) {
+            await db.collection("url_checks").insertOne({
+                url,
+                hostname,
+                timestamp: new Date(),
+                score: punteggio,
+                results: { ...risultato, eta, ip },
+                userFingerprint: "user_" + new Date().getTime()
+            });
+
+            // Aggiorna statistiche
+            const urlStats = await db.collection("url_stats").findOne({ hostname });
+            let avgScore = punteggio;
+            
+            if (urlStats) {
+                avgScore = (urlStats.avgScore * (urlStats.checkCount || 1) + punteggio) / ((urlStats.checkCount || 1) + 1);
+            }
+
+            let riskLevel = "HIGH";
+            if (punteggio >= 70) riskLevel = "LOW";
+            else if (punteggio >= 40) riskLevel = "MEDIUM";
+
+            await db.collection("url_stats").updateOne(
+                { hostname },
+                {
+                    $inc: { checkCount: 1 },
+                    $set: {
+                        lastCheck: new Date(),
+                        avgScore,
+                        riskLevel
+                    },
+                    $setOnInsert: {
+                        url,
+                        hostname,
+                        firstCheck: new Date()
+                    }
+                },
+                { upsert: true }
+            );
+        }
+
+        const stats = await db?.collection("url_stats").findOne({ hostname });
 
         res.send({
             dominio: risultato.dominio,
@@ -155,17 +214,24 @@ app.post("/api/analizza", async (req: any, res) => {
             reputazione: risultato.reputazione,
             eta,
             ip,
-            blacklist: false
+            blacklist: false,
+            stats: {
+                checkCount: stats?.checkCount || 1,
+                firstCheck: stats?.firstCheck || new Date(),
+                lastCheck: stats?.lastCheck || new Date(),
+                avgScore: stats?.avgScore || punteggio,
+                riskLevel: stats?.riskLevel || "MEDIUM"
+            }
         });
 
     } catch (err) {
+        console.error("Errore analisi:", err);
         res.status(400).send("URL non valido");
     }
 });
 
 function verificaUrl(url: string) {
     const https = url.startsWith("https://") ? 100 : 0;
-
 
     let dominio = 80;
 
@@ -247,6 +313,53 @@ function verificaUrl(url: string) {
     return { dominio, https, recensioni, reputazione };
 }
 
+// Calcola punteggio finale
+function calcolaPunteggio(risultato: any, eta: number): number {
+    const dominio = Math.min(Math.max(risultato.dominio, 0), 100);
+    const https = Math.min(Math.max(risultato.https, 0), 100);
+    const recensioni = Math.min(Math.max(risultato.recensioni, 0), 100);
+    const reputazione = Math.min(Math.max(risultato.reputazione, 0), 100);
+    const etaNorm = Math.min(Math.max(eta, 0), 100);
+
+    const punteggio =
+        dominio * 0.25 +
+        https * 0.15 +
+        recensioni * 0.20 +
+        reputazione * 0.20 +
+        etaNorm * 0.20;
+
+    return Math.round(punteggio);
+}
+
+// Nuovo endpoint: cronologia di un hostname
+app.get("/api/history/:hostname", async (req, res) => {
+    const { hostname } = req.params;
+
+    if (!db) {
+        res.status(500).send("Database non disponibile");
+        return;
+    }
+
+    try {
+        const history = await db.collection("url_checks")
+            .find({ hostname })
+            .sort({ timestamp: -1 })
+            .limit(10)
+            .toArray();
+
+        res.send({
+            hostname,
+            history: history.map(h => ({
+                score: h.score,
+                timestamp: h.timestamp,
+                results: h.results
+            }))
+        });
+    } catch (err) {
+        res.status(500).send("Errore recupero cronologia");
+    }
+});
+
 async function calcolaEtaDominio(hostname: string): Promise<number> {
     try {
         const result: any = await whois(hostname);
@@ -282,18 +395,16 @@ async function calcolaEtaDominio(hostname: string): Promise<number> {
     }
 }
 
-//F. default root e gestione errori
+//F. default route e gestione errori
 app.use(function (req, res) {
     if (req.originalUrl.startsWith("/api/"))
-        res.status(404).send("Risorsa non trovata");
-    else if (req.accepts("html"))
-        res.status(404).send(paginaErr);
+        res.status(404).json({ error: "Risorsa non trovata" });
     else
-        res.sendStatus(404)
+        res.status(404).send("<h1>Risorsa non trovata</h1>");
 });
 
 //G. gestione errori
 app.use(function (err: Error, req: express.Request, res: express.Response, next: express.NextFunction) {
-    console.error("*** ERRORE ***:\n" + err.stack); //elenco completo degli errori
-    res.status(500).send("Errore interno del server");
+    console.error("✗ ERRORE:", err.stack);
+    res.status(500).json({ error: "Errore interno del server" });
 });

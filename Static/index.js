@@ -15,16 +15,14 @@ async function analizza() {
         return;
     }
 
-    // let risposta = await inviaRichiesta("POST", "/analizza", { url });
-
-    // if (!risposta) return;
     let dati = await inviaRichiesta("POST", "/analizza", { url });
     if (!dati) return;
 
-    let punteggio = calcolaPunteggio(dati)
+    let punteggio = calcolaPunteggio(dati);
 
     aggiornaRisultato(punteggio);
     aggiornaDettagli(dati);
+    aggiornaStats(dati.stats);
 }
 
 
@@ -94,8 +92,28 @@ function aggiornaDettagli(dati) {
     document.getElementById("eta").innerText = dati.eta;
 }
 
+// AGGIORNA STATISTICHE
+function aggiornaStats(stats) {
 
+    if (!stats) return;
 
-function random(min, max) {
-    return Math.floor(Math.random() * (max - min + 1)) + min;
+    document.getElementById("checkCount").innerText = stats.checkCount || 0;
+
+    document.getElementById("avgScore").innerText = (stats.avgScore || 0).toFixed(1);
+
+    const firstCheck = new Date(stats.firstCheck);
+    document.getElementById("firstCheck").innerText = firstCheck.toLocaleDateString("it-IT");
+
+    const lastCheck = new Date(stats.lastCheck);
+    document.getElementById("lastCheck").innerText = lastCheck.toLocaleDateString("it-IT");
+
+    const riskLevel = document.getElementById("riskLevel");
+    riskLevel.innerText = stats.riskLevel || "SCONOSCIUTO";
+
+    // Colora in base al livello di rischio
+    riskLevel.style.color = 
+        stats.riskLevel === "LOW" ? "var(--green)" :
+        stats.riskLevel === "MEDIUM" ? "var(--yellow)" :
+        stats.riskLevel === "HIGH" ? "var(--red)" :
+        "var(--text)";
 }
