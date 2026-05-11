@@ -8,6 +8,8 @@ import queryStringParser from "./queryStringParser";
 import cors from "cors";
 import dns from "dns/promises";
 import whois from "whois-json";
+import axios from "axios";
+
 
 //B. configurazioni
 //riconosce i tipi automaticamente (non è any) -> grazie @types/node in devDependencies (sviluppo)
@@ -17,13 +19,14 @@ dotenv.config({ path: ".env" });
 const connStr = process.env.connectionStringAtlas;
 const port = parseInt(process.env.PORT!);
 const dbName = process.env.dbName;
+let blacklist: string[] = [];
 
 //C. creazione ed avvio del server HTTP
 const server: http.Server = http.createServer(app);
 let paginaErr = "";
 
 //server in ascolto sulla porta 1337
-server.listen(port, function () {
+server.listen(port, async function () {
     console.log("Server in ascolto sulla porta " + port);
 
     fs.readFile("./static/error.html", function (err, content) { //content è una sequenza di byte
@@ -32,6 +35,19 @@ server.listen(port, function () {
         else
             paginaErr = content.toString();
     })
+
+    try {
+        const response = await axios.get(
+            "https://raw.githubusercontent.com/phishdestroy/destroylist/main/list.json"
+        );
+
+        blacklist = response.data;
+
+        console.log("Blacklist caricata:", blacklist.length);
+
+    } catch (err) {
+        console.error("Errore caricamento blacklist", err);
+    }
 });
 
 //D. middleware
@@ -106,6 +122,28 @@ app.post("/api/analizza", async (req: any, res) => {
             dnsValido = false;
         }
 
+        const cleanHost = hostname
+            .replace(/^www\./, "")
+            .toLowerCase();
+
+        const dominioBlacklist = blacklist.some(d =>
+            cleanHost === d || cleanHost.endsWith("." + d)
+        );
+
+        if (dominioBlacklist) {
+            res.send({
+                dominio: 0,
+                https: 0,
+                recensioni: 0,
+                reputazione: 0,
+                eta: 0,
+                ip,
+                blacklist: true
+            });
+
+            return;
+        }
+
         const eta = await calcolaEtaDominio(hostname);
 
         const risultato = verificaUrl(url);
@@ -116,7 +154,8 @@ app.post("/api/analizza", async (req: any, res) => {
             recensioni: risultato.recensioni,
             reputazione: risultato.reputazione,
             eta,
-            ip
+            ip,
+            blacklist: false
         });
 
     } catch (err) {

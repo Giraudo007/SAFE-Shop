@@ -451,7 +451,7 @@
     .badge-didattico {
       display: flex;
     }
-    }
+    
 
     @media (max-width: 399px) {
       .badge-didattico {
