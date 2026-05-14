@@ -2,6 +2,57 @@
 
 let isLoading = false;
 
+const popularSites = [
+    {
+        name: "Temu",
+        url: "https://www.temu.com",
+        tag: "Marketplace",
+        note: "Offerte molto cercate"
+    },
+    {
+        name: "AliExpress",
+        url: "https://www.aliexpress.com",
+        tag: "Marketplace",
+        note: "Venditori internazionali"
+    },
+    {
+        name: "Shein",
+        url: "https://www.shein.com",
+        tag: "Moda",
+        note: "Shopping low cost"
+    },
+    {
+        name: "Vinted",
+        url: "https://www.vinted.it",
+        tag: "Second hand",
+        note: "Acquisti tra utenti"
+    },
+    {
+        name: "Subito",
+        url: "https://www.subito.it",
+        tag: "Annunci",
+        note: "Vendite tra privati"
+    },
+    {
+        name: "eBay",
+        url: "https://www.ebay.it",
+        tag: "Aste e shop",
+        note: "Marketplace storico"
+    },
+    {
+        name: "Etsy",
+        url: "https://www.etsy.com",
+        tag: "Artigianato",
+        note: "Negozi indipendenti"
+    },
+    {
+        name: "Wish",
+        url: "https://www.wish.com",
+        tag: "Marketplace",
+        note: "Prodotti a basso prezzo"
+    }
+];
+
 window.onload = function () {
     const btn = document.getElementById("btnAnalizza");
     const input = document.getElementById("txtUrl");
@@ -12,13 +63,19 @@ window.onload = function () {
             analizza();
         }
     });
+
+    renderSitiPopolari();
 };
 
-async function analizza() {
+async function analizza(urlSuggerito) {
     if (isLoading) return;
 
     const input = document.getElementById("txtUrl");
-    const url = input.value.trim();
+    const url = typeof urlSuggerito === "string" ? urlSuggerito : input.value.trim();
+
+    if (typeof urlSuggerito === "string") {
+        input.value = url;
+    }
 
     if (!url) {
         mostraFeedback("Inserisci un URL da analizzare.", "error");
@@ -37,8 +94,6 @@ async function analizza() {
         aggiornaDettagli(dati);
         aggiornaStats(dati.stats);
         mostraFeedback("Analisi completata.", "success");
-
-        await aggiornaCronologia(dati.hostname);
     } catch (err) {
         const message = err instanceof Error ? err.message : "Errore durante l'analisi.";
         mostraFeedback(message, "error");
@@ -105,64 +160,50 @@ function aggiornaStats(stats) {
     riskLevel.style.color = risk.color;
 }
 
-async function aggiornaCronologia(hostname) {
-    const historyList = document.getElementById("historyList");
-    const historyEmpty = document.getElementById("historyEmpty");
+function renderSitiPopolari() {
+    const container = document.getElementById("popularSites");
 
-    if (!hostname) {
-        renderCronologia([]);
+    if (!container) {
         return;
     }
 
-    try {
-        const data = await inviaRichiesta("GET", "/history/" + encodeURIComponent(hostname));
-        renderCronologia(data.history || []);
-    } catch {
-        historyList.innerHTML = "";
-        historyEmpty.innerText = "Cronologia non disponibile.";
-        historyEmpty.hidden = false;
-    }
-}
+    container.innerHTML = "";
 
-function renderCronologia(history) {
-    const historyList = document.getElementById("historyList");
-    const historyEmpty = document.getElementById("historyEmpty");
+    popularSites.forEach(function (site) {
+        const card = document.createElement("article");
+        card.className = "popular-site";
 
-    historyList.innerHTML = "";
+        const header = document.createElement("div");
+        header.className = "popular-site-head";
 
-    if (!history.length) {
-        historyEmpty.innerText = "Nessuna cronologia disponibile.";
-        historyEmpty.hidden = false;
-        return;
-    }
+        const name = document.createElement("strong");
+        name.innerText = site.name;
 
-    historyEmpty.hidden = true;
+        const tag = document.createElement("span");
+        tag.innerText = site.tag;
 
-    history.forEach(function (item) {
-        const risk = getRiskInfo(item.score || 0);
-        const row = document.createElement("div");
-        row.className = "history-item";
+        const url = document.createElement("span");
+        url.className = "popular-site-url";
+        url.innerText = site.url.replace("https://www.", "");
 
-        const meta = document.createElement("div");
-        meta.className = "history-meta";
+        const note = document.createElement("p");
+        note.innerText = site.note;
 
-        const date = document.createElement("strong");
-        date.innerText = formatDate(item.timestamp);
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "popular-site-action";
+        button.innerText = "Analizza";
+        button.addEventListener("click", function () {
+            analizza(site.url);
+        });
 
-        const details = document.createElement("span");
-        details.innerText = item.results && item.results.blacklist
-            ? "Blacklist rilevata"
-            : "Analisi standard";
-
-        const score = document.createElement("span");
-        score.className = "history-score " + risk.className;
-        score.innerText = (item.score || 0) + "%";
-
-        meta.appendChild(date);
-        meta.appendChild(details);
-        row.appendChild(meta);
-        row.appendChild(score);
-        historyList.appendChild(row);
+        header.appendChild(name);
+        header.appendChild(tag);
+        card.appendChild(header);
+        card.appendChild(url);
+        card.appendChild(note);
+        card.appendChild(button);
+        container.appendChild(card);
     });
 }
 
