@@ -1,39 +1,58 @@
-"use strict"
+"use strict";
+
+let isLoading = false;
 
 window.onload = function () {
+    const btn = document.getElementById("btnAnalizza");
+    const input = document.getElementById("txtUrl");
 
-    let btn = document.getElementById("btnAnalizza");
     btn.addEventListener("click", analizza);
-}
+    input.addEventListener("keydown", function (event) {
+        if (event.key === "Enter") {
+            analizza();
+        }
+    });
+};
 
 async function analizza() {
+    if (isLoading) return;
 
-    let url = document.getElementById("txtUrl").value;
+    const input = document.getElementById("txtUrl");
+    const url = input.value.trim();
 
     if (!url) {
-        alert("Inserisci un URL");
+        mostraFeedback("Inserisci un URL da analizzare.", "error");
+        input.focus();
         return;
     }
 
-    let dati = await inviaRichiesta("POST", "/analizza", { url });
-    if (!dati) return;
+    setLoading(true);
+    mostraFeedback("", "");
 
-    let punteggio = calcolaPunteggio(dati);
+    try {
+        const dati = await inviaRichiesta("POST", "/analizza", { url });
+        const punteggio = Number.isFinite(dati.score) ? dati.score : calcolaPunteggio(dati);
 
-    aggiornaRisultato(punteggio);
-    aggiornaDettagli(dati);
-    aggiornaStats(dati.stats);
+        aggiornaRisultato(punteggio);
+        aggiornaDettagli(dati);
+        aggiornaStats(dati.stats);
+        mostraFeedback("Analisi completata.", "success");
+
+        await aggiornaCronologia(dati.hostname);
+    } catch (err) {
+        const message = err instanceof Error ? err.message : "Errore durante l'analisi.";
+        mostraFeedback(message, "error");
+    } finally {
+        setLoading(false);
+    }
 }
 
-
-
-
 function calcolaPunteggio(dati) {
-    const dominio = Math.min(Math.max(dati.dominio, 0), 100);
-    const https = Math.min(Math.max(dati.https, 0), 100);
-    const recensioni = Math.min(Math.max(dati.recensioni, 0), 100);
-    const reputazione = Math.min(Math.max(dati.reputazione, 0), 100);
-    const eta = Math.min(Math.max(dati.eta, 0), 100);
+    const dominio = limitaPunteggio(dati.dominio);
+    const https = limitaPunteggio(dati.https);
+    const recensioni = limitaPunteggio(dati.recensioni);
+    const reputazione = limitaPunteggio(dati.reputazione);
+    const eta = limitaPunteggio(dati.eta);
 
     const punteggio =
         dominio * 0.25 +
@@ -45,75 +64,183 @@ function calcolaPunteggio(dati) {
     return Math.round(punteggio);
 }
 
-
-
-// AGGIORNA RISULTATO PRINCIPALE
 function aggiornaRisultato(punteggio) {
-
-    let lblPercentuale = document.getElementById("lblPercentuale");
-    let lblLivello = document.getElementById("lblLivello");
+    const lblPercentuale = document.getElementById("lblPercentuale");
+    const lblLivello = document.getElementById("lblLivello");
+    const circle = document.querySelector(".score-circle");
+    const risk = getRiskInfo(punteggio);
 
     lblPercentuale.innerText = punteggio + "%";
+    lblPercentuale.style.color = risk.color;
+    lblLivello.innerText = risk.label;
 
-    let livello = "";
-    let colore = "";
-
-    if (punteggio >= 70) {
-        livello = "Affidabile";
-        colore = "green";
-    }
-    else if (punteggio >= 40) {
-        livello = "Medio";
-        colore = "orange";
-    }
-    else {
-        livello = "Rischioso";
-        colore = "red";
-    }
-
-    lblLivello.innerText = livello;
-
-    lblPercentuale.style.color = colore;
+    circle.classList.remove("risk-low", "risk-medium", "risk-high");
+    circle.classList.add(risk.className);
 }
 
-
-
-// AGGIORNA DETTAGLI
 function aggiornaDettagli(dati) {
+    setText("dominio", formatScore(dati.dominio));
+    setText("https", dati.https === 100 ? "Sicuro" : "Non sicuro");
+    setText("recensioni", formatScore(dati.recensioni));
+    setText("reputazione", formatScore(dati.reputazione));
+    setText("eta", formatScore(dati.eta));
+    setText("ip", dati.ip || "non trovato");
+    setText("blacklist", dati.blacklist ? "Presente" : "Non presente");
 
-    document.getElementById("dominio").innerText = dati.dominio;
-
-    document.getElementById("https").innerText = dati.https == 100 ? "Sicuro" : "Non sicuro";
-
-    document.getElementById("recensioni").innerText = dati.recensioni;
-
-    document.getElementById("reputazione").innerText = dati.reputazione;
-
-    document.getElementById("eta").innerText = dati.eta;
+    const blacklistCard = document.getElementById("blacklistCard");
+    blacklistCard.classList.toggle("is-danger", Boolean(dati.blacklist));
 }
 
-// AGGIORNA STATISTICHE
 function aggiornaStats(stats) {
-
     if (!stats) return;
 
-    document.getElementById("checkCount").innerText = stats.checkCount || 0;
-
-    document.getElementById("avgScore").innerText = (stats.avgScore || 0).toFixed(1);
-
-    const firstCheck = new Date(stats.firstCheck);
-    document.getElementById("firstCheck").innerText = firstCheck.toLocaleDateString("it-IT");
-
-    const lastCheck = new Date(stats.lastCheck);
-    document.getElementById("lastCheck").innerText = lastCheck.toLocaleDateString("it-IT");
+    setText("checkCount", stats.checkCount || 0);
+    setText("avgScore", Number(stats.avgScore || 0).toFixed(1));
+    setText("firstCheck", formatDate(stats.firstCheck));
+    setText("lastCheck", formatDate(stats.lastCheck));
 
     const riskLevel = document.getElementById("riskLevel");
+    const risk = getRiskInfoFromLevel(stats.riskLevel);
     riskLevel.innerText = stats.riskLevel || "SCONOSCIUTO";
+    riskLevel.style.color = risk.color;
+}
 
-    // Colora in base al livello di rischio
-    riskLevel.style.color = 
-        stats.riskLevel === "LOW" ? "var(--green)" :
-        stats.riskLevel === "MEDIUM" ? "var(--yellow)" :
-        stats.riskLevel === "HIGH" ? "var(--red)" :
-        "var(--text)";
+async function aggiornaCronologia(hostname) {
+    const historyList = document.getElementById("historyList");
+    const historyEmpty = document.getElementById("historyEmpty");
+
+    if (!hostname) {
+        renderCronologia([]);
+        return;
+    }
+
+    try {
+        const data = await inviaRichiesta("GET", "/history/" + encodeURIComponent(hostname));
+        renderCronologia(data.history || []);
+    } catch {
+        historyList.innerHTML = "";
+        historyEmpty.innerText = "Cronologia non disponibile.";
+        historyEmpty.hidden = false;
+    }
+}
+
+function renderCronologia(history) {
+    const historyList = document.getElementById("historyList");
+    const historyEmpty = document.getElementById("historyEmpty");
+
+    historyList.innerHTML = "";
+
+    if (!history.length) {
+        historyEmpty.innerText = "Nessuna cronologia disponibile.";
+        historyEmpty.hidden = false;
+        return;
+    }
+
+    historyEmpty.hidden = true;
+
+    history.forEach(function (item) {
+        const risk = getRiskInfo(item.score || 0);
+        const row = document.createElement("div");
+        row.className = "history-item";
+
+        const meta = document.createElement("div");
+        meta.className = "history-meta";
+
+        const date = document.createElement("strong");
+        date.innerText = formatDate(item.timestamp);
+
+        const details = document.createElement("span");
+        details.innerText = item.results && item.results.blacklist
+            ? "Blacklist rilevata"
+            : "Analisi standard";
+
+        const score = document.createElement("span");
+        score.className = "history-score " + risk.className;
+        score.innerText = (item.score || 0) + "%";
+
+        meta.appendChild(date);
+        meta.appendChild(details);
+        row.appendChild(meta);
+        row.appendChild(score);
+        historyList.appendChild(row);
+    });
+}
+
+function setLoading(value) {
+    isLoading = value;
+
+    const btn = document.getElementById("btnAnalizza");
+    const input = document.getElementById("txtUrl");
+
+    btn.disabled = value;
+    input.disabled = value;
+    btn.innerText = value ? "Analisi..." : "Analizza";
+}
+
+function mostraFeedback(message, type) {
+    const feedback = document.getElementById("feedback");
+
+    feedback.innerText = message;
+    feedback.className = "feedback";
+
+    if (type) {
+        feedback.classList.add(type);
+    }
+}
+
+function getRiskInfo(score) {
+    if (score >= 70) {
+        return {
+            label: "Affidabile",
+            color: "var(--green)",
+            className: "risk-low"
+        };
+    }
+
+    if (score >= 40) {
+        return {
+            label: "Medio",
+            color: "var(--yellow)",
+            className: "risk-medium"
+        };
+    }
+
+    return {
+        label: "Rischioso",
+        color: "var(--red)",
+        className: "risk-high"
+    };
+}
+
+function getRiskInfoFromLevel(level) {
+    if (level === "LOW") return getRiskInfo(70);
+    if (level === "MEDIUM") return getRiskInfo(40);
+    if (level === "HIGH") return getRiskInfo(0);
+    return { color: "var(--text)", className: "" };
+}
+
+function limitaPunteggio(value) {
+    const numberValue = Number(value);
+    if (!Number.isFinite(numberValue)) return 0;
+    return Math.min(Math.max(numberValue, 0), 100);
+}
+
+function formatScore(value) {
+    return limitaPunteggio(value) + "/100";
+}
+
+function formatDate(value) {
+    if (!value) return "-";
+
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "-";
+
+    return date.toLocaleString("it-IT", {
+        dateStyle: "short",
+        timeStyle: "short"
+    });
+}
+
+function setText(id, value) {
+    document.getElementById(id).innerText = value;
 }

@@ -12,54 +12,42 @@
 
 <body>
 
-  <!-- HEADER -->
   <header>
     <div class="header-inner">
-
       <div class="logo">
         <span class="logo-text">SAFE<span>-Shop</span></span>
       </div>
-
-
     </div>
   </header>
 
-  <!-- HERO -->
   <section class="hero">
-
-    <h1>Verifica l'affidabilità di un sito e-commerce</h1>
+    <h1>Verifica l'affidabilita di un sito e-commerce</h1>
 
     <p>
       Inserisci l'URL del negozio online che vuoi analizzare.
-      SAFE-Shop analizza diversi indicatori per stimare il livello di affidabilità.
+      SAFE-Shop controlla indicatori tecnici, blacklist, dominio e cronologia.
     </p>
 
     <div class="search-bar">
-
       <div class="input-wrap">
-        <input id="txtUrl" type="text" placeholder="es. https://www.amazon.it">
+        <input id="txtUrl" type="text" placeholder="es. https://www.amazon.it" autocomplete="url">
       </div>
 
       <button id="btnAnalizza" class="btn-analizza">
         Analizza
       </button>
-
     </div>
 
+    <p id="feedback" class="feedback" role="status" aria-live="polite"></p>
   </section>
 
-  <!-- MAIN -->
   <main class="main">
-
-    <!-- RISULTATO -->
-    <div class="result-card">
-
+    <section class="result-card">
       <div class="result-card-header">
         <span>Risultato</span>
       </div>
 
       <div class="result-card-body">
-
         <div class="score-circle">
           <span id="lblPercentuale">--%</span>
         </div>
@@ -71,91 +59,102 @@
         <div class="legend">
           <div class="legend-item">
             <span class="legend-dot" style="background: var(--green);"></span>
-            Affidabile ≥ 70%
+            Affidabile &ge; 70%
           </div>
 
           <div class="legend-item">
             <span class="legend-dot" style="background: var(--yellow);"></span>
-            Medio 40–69%
+            Medio 40-69%
           </div>
 
           <div class="legend-item">
             <span class="legend-dot" style="background: var(--red);"></span>
-            Rischioso < 40% </div>
+            Rischioso &lt; 40%
           </div>
-
-        </div>
-
-      </div>
-
-      <!-- DETTAGLI -->
-      <p class="section-label">Dettagli Analisi</p>
-
-      <div class="details-grid">
-
-        <div class="detail-card">
-          <p class="detail-label">Età Dominio</p>
-          <strong id="eta" class="detail-value">--</strong>
-          <p class="detail-desc">Anzianità del dominio</p>
-        </div>
-
-        <div class="detail-card">
-          <p class="detail-label">Dominio</p>
-          <strong id="dominio" class="detail-value">--</strong>
-          <p class="detail-desc">Analisi del dominio</p>
-        </div>
-
-        <div class="detail-card">
-          <p class="detail-label">HTTPS</p>
-          <strong id="https" class="detail-value">--</strong>
-          <p class="detail-desc">Connessione sicura</p>
-        </div>
-
-        <div class="detail-card">
-          <p class="detail-label">Recensioni</p>
-          <strong id="recensioni" class="detail-value">--</strong>
-          <p class="detail-desc">Popolarità apparente</p>
-        </div>
-
-        <div class="detail-card">
-          <p class="detail-label">Reputazione</p>
-          <strong id="reputazione" class="detail-value">--</strong>
-          <p class="detail-desc">Indice di fiducia</p>
-        </div>
-
-      </div>
-
-      <!-- STATISTICHE RICERCA -->
-      <p class="section-label">Statistiche</p>
-
-      <div class="stats-card">
-        <div class="stat-item">
-          <span class="stat-label">Ricerche precedenti</span>
-          <strong id="checkCount" class="stat-value">0</strong>
-        </div>
-        <div class="stat-item">
-          <span class="stat-label">Primo controllo</span>
-          <em id="firstCheck" class="stat-date">-</em>
-        </div>
-        <div class="stat-item">
-          <span class="stat-label">Ultimo controllo</span>
-          <em id="lastCheck" class="stat-date">-</em>
-        </div>
-        <div class="stat-item">
-          <span class="stat-label">Punteggio medio</span>
-          <strong id="avgScore" class="stat-value">-</strong>
-        </div>
-        <div class="stat-item">
-          <span class="stat-label">Livello rischio</span>
-          <strong id="riskLevel" class="stat-risk">-</strong>
         </div>
       </div>
+    </section>
 
+    <p class="section-label">Dettagli Analisi</p>
+
+    <section class="details-grid">
+      <div class="detail-card">
+        <p class="detail-label">Eta Dominio</p>
+        <strong id="eta" class="detail-value">--</strong>
+        <p class="detail-desc">Anzianita del dominio</p>
+      </div>
+
+      <div class="detail-card">
+        <p class="detail-label">Dominio</p>
+        <strong id="dominio" class="detail-value">--</strong>
+        <p class="detail-desc">Analisi del dominio</p>
+      </div>
+
+      <div class="detail-card">
+        <p class="detail-label">HTTPS</p>
+        <strong id="https" class="detail-value">--</strong>
+        <p class="detail-desc">Connessione sicura</p>
+      </div>
+
+      <div class="detail-card">
+        <p class="detail-label">Recensioni</p>
+        <strong id="recensioni" class="detail-value">--</strong>
+        <p class="detail-desc">Popolarita apparente</p>
+      </div>
+
+      <div class="detail-card">
+        <p class="detail-label">Reputazione</p>
+        <strong id="reputazione" class="detail-value">--</strong>
+        <p class="detail-desc">Indice di fiducia</p>
+      </div>
+
+      <div class="detail-card">
+        <p class="detail-label">IP</p>
+        <strong id="ip" class="detail-value">--</strong>
+        <p class="detail-desc">Primo indirizzo IPv4 risolto</p>
+      </div>
+
+      <div id="blacklistCard" class="detail-card">
+        <p class="detail-label">Blacklist</p>
+        <strong id="blacklist" class="detail-value">--</strong>
+        <p class="detail-desc">Presenza in liste di rischio</p>
+      </div>
+    </section>
+
+    <p class="section-label">Statistiche</p>
+
+    <section class="stats-card">
+      <div class="stat-item">
+        <span class="stat-label">Ricerche precedenti</span>
+        <strong id="checkCount" class="stat-value">0</strong>
+      </div>
+      <div class="stat-item">
+        <span class="stat-label">Primo controllo</span>
+        <em id="firstCheck" class="stat-date">-</em>
+      </div>
+      <div class="stat-item">
+        <span class="stat-label">Ultimo controllo</span>
+        <em id="lastCheck" class="stat-date">-</em>
+      </div>
+      <div class="stat-item">
+        <span class="stat-label">Punteggio medio</span>
+        <strong id="avgScore" class="stat-value">-</strong>
+      </div>
+      <div class="stat-item">
+        <span class="stat-label">Livello rischio</span>
+        <strong id="riskLevel" class="stat-risk">-</strong>
+      </div>
+    </section>
+
+    <p class="section-label">Cronologia</p>
+
+    <section class="history-card">
+      <p id="historyEmpty" class="empty-state">Nessuna analisi ancora eseguita.</p>
+      <div id="historyList" class="history-list"></div>
+    </section>
   </main>
 
-  <!-- FOOTER -->
   <footer>
-
     <div class="disclaimer">
       <p>
         <strong>Disclaimer:</strong>
@@ -165,13 +164,12 @@
     </div>
 
     <div class="footer-bottom">
-      <span>© 2025 SAFE-Shop</span>
+      <span>SAFE-Shop 2026</span>
       <span>Progetto didattico</span>
     </div>
-
   </footer>
 
+  <script src="index.js"></script>
 </body>
-<script src="index.js"></script>
 
 </html>
