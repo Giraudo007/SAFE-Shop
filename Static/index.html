@@ -24,13 +24,13 @@
     <h1>Verifica l'affidabilita di un sito e-commerce</h1>
 
     <p>
-      Inserisci l'URL del negozio online che vuoi analizzare.
+      Inserisci dominio, URL o IP pubblico del negozio online che vuoi analizzare.
       SAFE-Shop controlla indicatori tecnici, blacklist, dominio e reputazione.
     </p>
 
     <div class="search-bar">
       <div class="input-wrap">
-        <input id="txtUrl" type="text" placeholder="es. https://www.amazon.it" autocomplete="url">
+        <input id="txtUrl" type="text" placeholder="es. amazon.it oppure 1.1.1.1" autocomplete="url">
       </div>
 
       <button id="btnAnalizza" class="btn-analizza">
@@ -108,10 +108,11 @@
         <p class="detail-desc">Indice di fiducia</p>
       </div>
 
-      <div class="detail-card">
-        <p class="detail-label">IP</p>
-        <strong id="ip" class="detail-value">--</strong>
-        <p class="detail-desc">Primo indirizzo IPv4 risolto</p>
+      <div id="ipCard" class="detail-card">
+        <p class="detail-label">Infrastruttura</p>
+        <strong id="ipStatus" class="detail-value">--</strong>
+        <p id="ip" class="detail-desc">IP non ancora verificato</p>
+        <p id="ipNote" class="detail-desc">Stato tecnico del dominio</p>
       </div>
 
       <div id="blacklistCard" class="detail-card">

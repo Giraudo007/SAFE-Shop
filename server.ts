@@ -4,6 +4,7 @@ import dotenv from "dotenv";
 import { MongoClient, Db } from "mongodb";
 import cors from "cors";
 import dns from "dns/promises";
+import net from "net";
 import whois from "whois-json";
 import axios from "axios";
 
@@ -16,9 +17,24 @@ type UrlMetrics = {
     reputazione: number;
 };
 
+type IpStatus = "OK" | "WARNING";
+
+type IpInfo = {
+    primary: string;
+    ipv4: string[];
+    ipv6: string[];
+    resolved: boolean;
+    status: IpStatus;
+    label: string;
+    note: string;
+    provider: string | null;
+    usesCdn: boolean;
+};
+
 type AnalysisStoredResult = UrlMetrics & {
     eta: number;
     ip: string;
+    ipInfo: IpInfo;
     blacklist: boolean;
 };
 
@@ -30,30 +46,51 @@ type StatsSummary = {
     riskLevel: RiskLevel;
 };
 
+type UrlStatsDocument = StatsSummary & {
+    hostname: string;
+    url: string;
+    scoreTotal: number;
+};
+
+type SaveAnalysisResult = {
+    stats: StatsSummary;
+    alreadyStored: boolean;
+};
+
 // B. configurazioni
 dotenv.config({ path: ".env", quiet: true });
 
 const app = express();
-const connStr = process.env.connectionStringAtlas || process.env.MONGODB_URI || "";
+const connStr = process.env.connectionStringLocal || process.env.MONGODB_URI || "";
 const dbName = process.env.dbName || process.env.DB_NAME || "safeshop";
 const port = Number.parseInt(process.env.PORT || "3000", 10);
 const mongoDisabled = /^(1|true|yes)$/i.test(process.env.MONGODB_DISABLED || "");
+const checkHistoryRetentionDays = parsePositiveInteger(process.env.URL_CHECK_RETENTION_DAYS, 30);
+const checkHistoryRetentionSeconds = checkHistoryRetentionDays * 24 * 60 * 60;
 
 let blacklist = new Set<string>();
 let db: Db | undefined;
 let client: MongoClient | undefined;
+let server: ReturnType<typeof app.listen> | undefined;
+let databaseInitPromise: Promise<Db | undefined> | undefined;
+
+class UserInputError extends Error {
+    constructor(message: string) {
+        super(message);
+        this.name = "UserInputError";
+    }
+}
 
 // C. creazione ed avvio del server HTTP
-const server = app.listen(port, async function () {
-    console.log("Server in ascolto sulla porta " + port);
-
-    await inizializzaDatabase();
-    await caricaBlacklist();
-});
-
 process.on("SIGINT", async () => {
     await client?.close();
-    server.close(() => process.exit(0));
+
+    if (server) {
+        server.close(() => process.exit(0));
+        return;
+    }
+
+    process.exit(0);
 });
 
 // D. middleware
@@ -72,8 +109,10 @@ app.post("/api/analizza", async (req, res) => {
         const parsedUrl = normalizzaUrlInput(req.body?.url);
         const url = parsedUrl.toString();
         const hostname = normalizzaHostname(parsedUrl.hostname);
-        const ip = await risolviIp(parsedUrl.hostname);
+        const ipInfo = await analizzaInfrastrutturaIp(parsedUrl.hostname);
         const blacklistTrovata = isInBlacklist(hostname);
+
+        validaEsistenzaRicerca(hostname, ipInfo, blacklistTrovata);
 
         let metriche: UrlMetrics;
         let eta: number;
@@ -95,20 +134,24 @@ app.post("/api/analizza", async (req, res) => {
         const results: AnalysisStoredResult = {
             ...metriche,
             eta,
-            ip,
+            ip: ipInfo.primary,
+            ipInfo,
             blacklist: blacklistTrovata
         };
-        const stats = await salvaAnalisi(url, hostname, score, results);
+        const saveResult = await salvaAnalisi(url, hostname, score, results);
 
         res.json({
             ...results,
             score,
             hostname,
-            stats
+            stats: saveResult.stats,
+            giaPresente: saveResult.alreadyStored
         });
     } catch (err) {
         console.error("Errore analisi:", err);
-        res.status(400).json({ error: "URL non valido" });
+        res.status(400).json({
+            error: err instanceof UserInputError ? err.message : "URL non valido"
+        });
     }
 });
 
@@ -120,21 +163,21 @@ app.get("/api/history/:hostname", async (req, res) => {
         return;
     }
 
-    if (!db) {
-        res.status(503).json({
-            error: "Database non disponibile",
-            hostname,
-            history: []
-        });
-        return;
-    }
-
     try {
-        const history = await db.collection("url_checks")
+        const history = await withMongoRetry(database => database.collection("url_checks")
             .find({ hostname })
             .sort({ timestamp: -1 })
             .limit(10)
-            .toArray();
+            .toArray());
+
+        if (!history) {
+            res.status(503).json({
+                error: "Database non disponibile",
+                hostname,
+                history: []
+            });
+            return;
+        }
 
         res.json({
             hostname,
@@ -150,24 +193,155 @@ app.get("/api/history/:hostname", async (req, res) => {
     }
 });
 
-async function inizializzaDatabase() {
+async function inizializzaDatabase(): Promise<Db | undefined> {
     if (mongoDisabled || !connStr) {
         console.warn("MongoDB non configurato: i risultati non saranno salvati.");
+        return undefined;
+    }
+
+    if (db) {
+        return db;
+    }
+
+    if (databaseInitPromise) {
+        return databaseInitPromise;
+    }
+
+    databaseInitPromise = creaConnessioneDatabase().finally(() => {
+        databaseInitPromise = undefined;
+    });
+
+    return databaseInitPromise;
+}
+
+async function creaConnessioneDatabase(): Promise<Db | undefined> {
+    console.log("🔌 Tentativo connessione a MongoDB:", connStr.substring(0, 50) + "...");
+
+    let mongoClient: MongoClient | undefined;
+
+    try {
+        mongoClient = new MongoClient(connStr, {
+            serverSelectionTimeoutMS: 5000
+        });
+        await mongoClient.connect();
+
+        const database = mongoClient.db(dbName);
+
+        console.log("📁 Database selezionato:", dbName);
+
+        const indexesUrl = await database.collection("url_checks").createIndex({ hostname: 1, timestamp: -1 });
+        console.log("📍 Indice creato su url_checks:", indexesUrl);
+
+        await configuraPuliziaStorico(database);
+        
+        const indexesStats = await database.collection("url_stats").createIndex({ hostname: 1 });
+        console.log("📍 Indice creato su url_stats:", indexesStats);
+
+        client = mongoClient;
+        db = database;
+
+        console.log("✅ MongoDB connesso e pronto!");
+        return database;
+    } catch (err) {
+        await mongoClient?.close().catch(() => undefined);
+        db = undefined;
+        client = undefined;
+        console.error("❌ ERRORE connessione MongoDB:", err);
+        return undefined;
+    }
+}
+
+async function configuraPuliziaStorico(database: Db): Promise<void> {
+    const collection = database.collection("url_checks");
+    const ttlIndexName = "url_checks_timestamp_ttl";
+    const indexes = await collection.indexes();
+    const timestampIndex = indexes.find(index => isTimestampIndexKey(index.key));
+
+    if (timestampIndex) {
+        if (timestampIndex.expireAfterSeconds !== checkHistoryRetentionSeconds) {
+            await database.command({
+                collMod: "url_checks",
+                index: {
+                    name: timestampIndex.name,
+                    expireAfterSeconds: checkHistoryRetentionSeconds
+                }
+            });
+        }
+
+        console.log(`🧹 Storico url_checks mantenuto per ${checkHistoryRetentionDays} giorni:`, timestampIndex.name);
         return;
     }
 
+    const ttlIndex = await collection.createIndex(
+        { timestamp: 1 },
+        {
+            name: ttlIndexName,
+            expireAfterSeconds: checkHistoryRetentionSeconds
+        }
+    );
+
+    console.log(`🧹 Storico url_checks mantenuto per ${checkHistoryRetentionDays} giorni:`, ttlIndex);
+}
+
+function isTimestampIndexKey(key: unknown): boolean {
+    if (!key || typeof key !== "object") {
+        return false;
+    }
+
+    const fields = Object.entries(key as Record<string, unknown>);
+    return fields.length === 1 && fields[0]?.[0] === "timestamp" && fields[0]?.[1] === 1;
+}
+
+function parsePositiveInteger(value: string | undefined, fallback: number): number {
+    const parsed = Number.parseInt(value || "", 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+async function getDatabase(): Promise<Db | undefined> {
+    if (db) {
+        return db;
+    }
+
+    return inizializzaDatabase();
+}
+
+async function resetDatabaseConnection(): Promise<void> {
+    const currentClient = client;
+
+    db = undefined;
+    client = undefined;
+    databaseInitPromise = undefined;
+
+    await currentClient?.close().catch(() => undefined);
+}
+
+function isMongoNotConnectedError(err: unknown): boolean {
+    return err instanceof Error && err.name === "MongoNotConnectedError";
+}
+
+async function withMongoRetry<T>(operation: (database: Db) => Promise<T>): Promise<T | null> {
+    let database = await getDatabase();
+
+    if (!database) {
+        return null;
+    }
+
     try {
-        client = new MongoClient(connStr);
-        await client.connect();
-        db = client.db(dbName);
-
-        await db.collection("url_checks").createIndex({ hostname: 1, timestamp: -1 });
-        await db.collection("url_stats").createIndex({ hostname: 1 });
-
-        console.log("MongoDB connesso");
+        return await operation(database);
     } catch (err) {
-        db = undefined;
-        console.error("Errore MongoDB:", err);
+        if (!isMongoNotConnectedError(err)) {
+            throw err;
+        }
+
+        console.warn("Connessione MongoDB chiusa: provo a riconnettere una volta.");
+        await resetDatabaseConnection();
+        database = await getDatabase();
+
+        if (!database) {
+            return null;
+        }
+
+        return operation(database);
     }
 }
 
@@ -200,7 +374,7 @@ async function caricaBlacklist() {
 
 function normalizzaUrlInput(rawUrl: unknown): URL {
     if (typeof rawUrl !== "string" || !rawUrl.trim()) {
-        throw new Error("URL mancante");
+        throw new UserInputError("Inserisci un URL, dominio o IP da analizzare.");
     }
 
     const trimmed = rawUrl.trim();
@@ -209,11 +383,17 @@ function normalizzaUrlInput(rawUrl: unknown): URL {
     const parsed = new URL(value);
 
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-        throw new Error("Protocollo non supportato");
+        throw new UserInputError("Protocollo non supportato: usa http o https.");
     }
 
     if (!parsed.hostname || /\s/.test(parsed.hostname)) {
-        throw new Error("Hostname non valido");
+        throw new UserInputError("Nome dominio o IP non valido.");
+    }
+
+    const hostname = normalizzaHostname(parsed.hostname);
+
+    if (!isIpLiteral(hostname) && !isDominioPubblicoValido(hostname)) {
+        throw new UserInputError("Inserisci un dominio completo, ad esempio amazon.it, oppure un IP pubblico valido.");
     }
 
     return parsed;
@@ -223,6 +403,7 @@ function normalizzaHostname(hostname: string | undefined): string {
     return (hostname || "")
         .trim()
         .toLowerCase()
+        .replace(/^\[(.*)\]$/, "$1")
         .replace(/\.$/, "")
         .replace(/^www\./, "");
 }
@@ -279,13 +460,292 @@ function isInBlacklist(hostname: string): boolean {
     return false;
 }
 
-async function risolviIp(hostname: string): Promise<string> {
-    try {
-        const addresses = await withTimeout(dns.resolve4(hostname), 5000);
-        return addresses[0] || "non trovato";
-    } catch {
-        return "non trovato";
+async function analizzaInfrastrutturaIp(hostname: string): Promise<IpInfo> {
+    const normalizedHost = normalizzaHostname(hostname);
+    const ipVersion = net.isIP(normalizedHost);
+
+    if (ipVersion !== 0) {
+        const isPublic = isIpPubblico(normalizedHost);
+
+        return {
+            primary: normalizedHost,
+            ipv4: ipVersion === 4 ? [normalizedHost] : [],
+            ipv6: ipVersion === 6 ? [normalizedHost] : [],
+            resolved: isPublic,
+            status: isPublic ? "OK" : "WARNING",
+            label: isPublic ? "IP valido" : "IP non pubblico",
+            note: isPublic
+                ? "L'indirizzo IP inserito e valido e pubblico."
+                : "L'indirizzo IP inserito e privato, locale o riservato: non indica un negozio raggiungibile pubblicamente.",
+            provider: null,
+            usesCdn: false
+        };
     }
+
+    const [ipv4, ipv6, cname] = await Promise.all([
+        risolviRecordDns(() => dns.resolve4(normalizedHost)),
+        risolviRecordDns(() => dns.resolve6(normalizedHost)),
+        risolviRecordDns(() => dns.resolveCname(normalizedHost))
+    ]);
+
+    const allIps = [...ipv4, ...ipv6];
+    const hasPublicIp = allIps.some(isIpPubblico);
+    const provider = identificaProviderInfrastruttura(cname, allIps);
+    const usesCdn = Boolean(provider);
+
+    if (allIps.length === 0) {
+        return {
+            primary: "non trovato",
+            ipv4,
+            ipv6,
+            resolved: false,
+            status: "WARNING",
+            label: "DNS non risolto",
+            note: "Il dominio non restituisce IP: segnale tecnico da controllare.",
+            provider,
+            usesCdn
+        };
+    }
+
+    if (!hasPublicIp) {
+        return {
+            primary: allIps[0] || "non trovato",
+            ipv4,
+            ipv6,
+            resolved: false,
+            status: "WARNING",
+            label: "IP non pubblico",
+            note: "Il dominio risolve solo verso IP privati o riservati: non sembra un negozio pubblico raggiungibile da Internet.",
+            provider,
+            usesCdn
+        };
+    }
+
+    if (usesCdn && provider) {
+        return {
+            primary: allIps[0] || "non trovato",
+            ipv4,
+            ipv6,
+            resolved: true,
+            status: "OK",
+            label: "CDN rilevata",
+            note: `Dominio raggiungibile tramite ${provider}. Protegge l'infrastruttura, ma non garantisce da sola l'affidabilita del negozio.`,
+            provider,
+            usesCdn
+        };
+    }
+
+    return {
+        primary: allIps[0] || "non trovato",
+        ipv4,
+        ipv6,
+        resolved: true,
+        status: "OK",
+        label: "DNS OK",
+        note: "Il dominio restituisce IP validi: e un segnale tecnico positivo, non una garanzia assoluta.",
+        provider,
+        usesCdn
+    };
+}
+
+function validaEsistenzaRicerca(hostname: string, ipInfo: IpInfo, blacklistTrovata: boolean): void {
+    if (blacklistTrovata) {
+        return;
+    }
+
+    if (ipInfo.resolved) {
+        return;
+    }
+
+    if (isIpLiteral(hostname)) {
+        throw new UserInputError("L'IP inserito non e pubblico o non puo essere verificato come indirizzo raggiungibile da Internet.");
+    }
+
+    if (ipInfo.label === "IP non pubblico") {
+        throw new UserInputError("Il dominio inserito esiste, ma punta solo a IP privati o riservati.");
+    }
+
+    throw new UserInputError("Il dominio inserito non esiste o non restituisce un IP valido. Controlla il nome e riprova.");
+}
+
+async function risolviRecordDns<T>(resolver: () => Promise<T[]>): Promise<T[]> {
+    try {
+        return await withTimeout(resolver(), 5000);
+    } catch {
+        return [];
+    }
+}
+
+function identificaProviderInfrastruttura(cnameRecords: string[], ips: string[]): string | null {
+    const cname = cnameRecords.join(" ").toLowerCase();
+
+    const providers = [
+        { name: "Cloudflare", pattern: /cloudflare/ },
+        { name: "Akamai", pattern: /akamai|edgesuite|edgekey/ },
+        { name: "Amazon CloudFront", pattern: /cloudfront/ },
+        { name: "Fastly", pattern: /fastly/ },
+        { name: "Google Cloud", pattern: /googlehosted|googleusercontent|ghs\.google/ },
+        { name: "Shopify", pattern: /myshopify|shops\.myshopify/ },
+        { name: "Wix", pattern: /wixdns|wixsite/ },
+        { name: "Squarespace", pattern: /squarespace/ }
+    ];
+
+    const cnameProvider = providers.find(provider => provider.pattern.test(cname))?.name;
+
+    if (cnameProvider) {
+        return cnameProvider;
+    }
+
+    if (ips.some(isCloudflareIp)) {
+        return "Cloudflare";
+    }
+
+    return null;
+}
+
+function isIpLiteral(value: string): boolean {
+    return net.isIP(normalizzaHostname(value)) !== 0;
+}
+
+function isDominioPubblicoValido(hostname: string): boolean {
+    const normalizedHost = normalizzaHostname(hostname);
+
+    if (!normalizedHost.includes(".") || normalizedHost.length > 253) {
+        return false;
+    }
+
+    const labels = normalizedHost.split(".");
+    const tld = labels[labels.length - 1] || "";
+
+    return labels.length >= 2 && labels.every(isEtichettaDnsValida) && isTldValido(tld);
+}
+
+function isEtichettaDnsValida(label: string): boolean {
+    return /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label);
+}
+
+function isTldValido(tld: string): boolean {
+    return /^[a-z]{2,63}$/.test(tld) || /^xn--[a-z0-9-]{2,59}$/.test(tld);
+}
+
+function isIpPubblico(ip: string): boolean {
+    const normalizedIp = normalizzaHostname(ip);
+    const ipVersion = net.isIP(normalizedIp);
+
+    if (ipVersion === 4) {
+        return isIpv4Pubblico(normalizedIp);
+    }
+
+    if (ipVersion === 6) {
+        return isIpv6Pubblico(normalizedIp);
+    }
+
+    return false;
+}
+
+function isIpv4Pubblico(ip: string): boolean {
+    const reservedRanges = [
+        "0.0.0.0/8",
+        "10.0.0.0/8",
+        "100.64.0.0/10",
+        "127.0.0.0/8",
+        "169.254.0.0/16",
+        "172.16.0.0/12",
+        "192.0.0.0/24",
+        "192.0.2.0/24",
+        "192.168.0.0/16",
+        "198.18.0.0/15",
+        "198.51.100.0/24",
+        "203.0.113.0/24",
+        "224.0.0.0/4",
+        "240.0.0.0/4",
+        "255.255.255.255/32"
+    ];
+
+    return !reservedRanges.some(range => isIpv4InCidr(ip, range));
+}
+
+function isIpv6Pubblico(ip: string): boolean {
+    const normalizedIp = ip.toLowerCase();
+    const ipv4MappedMatch = normalizedIp.match(/::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/);
+    const firstBlock = normalizedIp.split(":")[0] || "";
+    const firstByte = Number.parseInt(firstBlock.slice(0, 2), 16);
+
+    if (ipv4MappedMatch?.[1]) {
+        return isIpv4Pubblico(ipv4MappedMatch[1]);
+    }
+
+    if (normalizedIp === "::" || normalizedIp === "::1") {
+        return false;
+    }
+
+    if (/^fe[89a-f]/.test(normalizedIp)) {
+        return false;
+    }
+
+    if (normalizedIp.startsWith("2001:db8:") || normalizedIp === "2001:db8::") {
+        return false;
+    }
+
+    if (Number.isFinite(firstByte) && (firstByte & 0xfe) === 0xfc) {
+        return false;
+    }
+
+    if (Number.isFinite(firstByte) && firstByte === 0xff) {
+        return false;
+    }
+
+    return true;
+}
+
+function isCloudflareIp(ip: string): boolean {
+    if (ip.startsWith("2606:4700:") || ip.startsWith("2a06:98c0:")) {
+        return true;
+    }
+
+    const ranges = [
+        "103.21.244.0/22",
+        "103.22.200.0/22",
+        "103.31.4.0/22",
+        "104.16.0.0/13",
+        "104.24.0.0/14",
+        "108.162.192.0/18",
+        "131.0.72.0/22",
+        "141.101.64.0/18",
+        "162.158.0.0/15",
+        "172.64.0.0/13",
+        "173.245.48.0/20",
+        "188.114.96.0/20",
+        "190.93.240.0/20",
+        "197.234.240.0/22",
+        "198.41.128.0/17"
+    ];
+
+    return ranges.some(range => isIpv4InCidr(ip, range));
+}
+
+function isIpv4InCidr(ip: string, cidr: string): boolean {
+    const [rangeIp, prefixRaw] = cidr.split("/");
+    const prefix = Number.parseInt(prefixRaw || "", 10);
+    const ipNumber = ipv4ToNumber(ip);
+    const rangeNumber = ipv4ToNumber(rangeIp || "");
+
+    if (ipNumber === null || rangeNumber === null || !Number.isFinite(prefix)) {
+        return false;
+    }
+
+    const mask = prefix === 0 ? 0 : (0xffffffff << (32 - prefix)) >>> 0;
+    return (ipNumber & mask) === (rangeNumber & mask);
+}
+
+function ipv4ToNumber(ip: string): number | null {
+    const parts = ip.split(".").map(part => Number.parseInt(part, 10));
+
+    if (parts.length !== 4 || parts.some(part => !Number.isInteger(part) || part < 0 || part > 255)) {
+        return null;
+    }
+
+    return parts.reduce((value, part) => ((value << 8) + part) >>> 0, 0);
 }
 
 async function salvaAnalisi(
@@ -293,63 +753,153 @@ async function salvaAnalisi(
     hostname: string,
     score: number,
     results: AnalysisStoredResult
-): Promise<StatsSummary> {
+): Promise<SaveAnalysisResult> {
     const timestamp = new Date();
 
-    if (!db) {
-        return creaStatsDefault(score, timestamp);
-    }
-
     try {
-        const statsCollection = db.collection("url_stats");
-        const previous = await statsCollection.findOne({ hostname });
-        const previousCount = Number(previous?.checkCount || 0);
-        const checkCount = previousCount + 1;
-        const previousAvg = Number(previous?.avgScore || 0);
-        const avgScore = previousCount > 0
-            ? ((previousAvg * previousCount) + score) / checkCount
-            : score;
-        const firstCheck = normalizzaData(previous?.firstCheck) || timestamp;
-        const riskLevel = calcolaLivelloRischio(avgScore);
+        const existingStats = await trovaStatsEsistenti(hostname, score, timestamp);
 
-        await db.collection("url_checks").insertOne({
+        if (existingStats) {
+            console.log("Hostname gia presente in MongoDB, salto inserimento:", hostname);
+            return {
+                stats: existingStats,
+                alreadyStored: true
+            };
+        }
+
+        console.log("💾 Inizio salvataggio per hostname:", hostname);
+
+        console.log("✍️ Inserting in url_checks - hostname:", hostname, "score:", score);
+        
+        const insertResult = await withMongoRetry(database => database.collection("url_checks").insertOne({
             url,
             hostname,
             timestamp,
             score,
             results,
             userFingerprint: "user_" + timestamp.getTime()
-        });
+        }));
 
-        await statsCollection.updateOne(
-            { hostname },
+        if (!insertResult) {
+            console.warn("Database non disponibile - ritorno stats default");
+            return {
+                stats: creaStatsDefault(score, timestamp),
+                alreadyStored: false
+            };
+        }
+        
+        console.log("✅ Inserito in url_checks con ID:", insertResult.insertedId);
+
+        console.log("🔄 Aggiornamento atomico url_stats");
+
+        const stats = await aggiornaStatsUrl(url, hostname, score, timestamp);
+
+        if (!stats) {
+            console.warn("Database non disponibile durante aggiornamento stats - ritorno stats default");
+            return {
+                stats: creaStatsDefault(score, timestamp),
+                alreadyStored: false
+            };
+        }
+
+        console.log("✅ Salvataggio completato!");
+
+        return {
+            stats,
+            alreadyStored: false
+        };
+    } catch (err) {
+        console.error("❌ ERRORE salvataggio analisi:", err);
+        return {
+            stats: creaStatsDefault(score, timestamp),
+            alreadyStored: false
+        };
+    }
+}
+
+async function trovaStatsEsistenti(
+    hostname: string,
+    fallbackScore: number,
+    fallbackTimestamp: Date
+): Promise<StatsSummary | null> {
+    const statsDocument = await withMongoRetry(database => database.collection("url_stats").findOne({ hostname }));
+
+    if (statsDocument) {
+        return creaStatsDaDocumento(statsDocument as Partial<UrlStatsDocument>, fallbackScore, fallbackTimestamp);
+    }
+
+    const checkDocument = await withMongoRetry(database => database.collection("url_checks").findOne(
+        { hostname },
+        { sort: { timestamp: -1 } }
+    ));
+
+    if (!checkDocument) {
+        return null;
+    }
+
+    const existingScore = normalizzaNumero(checkDocument.score, fallbackScore);
+    const existingTimestamp = normalizzaData(checkDocument.timestamp) || fallbackTimestamp;
+
+    return creaStatsDefault(existingScore, existingTimestamp);
+}
+
+async function aggiornaStatsUrl(
+    url: string,
+    hostname: string,
+    score: number,
+    timestamp: Date
+): Promise<StatsSummary | null> {
+    const statsDocument = await withMongoRetry(database => database.collection("url_stats").findOneAndUpdate(
+        { hostname },
+        [
             {
                 $set: {
                     url,
                     hostname,
-                    checkCount,
+                    firstCheck: { $ifNull: ["$firstCheck", timestamp] },
                     lastCheck: timestamp,
-                    avgScore,
-                    riskLevel
-                },
-                $setOnInsert: {
-                    firstCheck
+                    checkCount: { $add: [{ $ifNull: ["$checkCount", 0] }, 1] },
+                    scoreTotal: {
+                        $add: [
+                            {
+                                $ifNull: [
+                                    "$scoreTotal",
+                                    {
+                                        $multiply: [
+                                            { $ifNull: ["$avgScore", 0] },
+                                            { $ifNull: ["$checkCount", 0] }
+                                        ]
+                                    }
+                                ]
+                            },
+                            score
+                        ]
+                    }
                 }
             },
-            { upsert: true }
-        );
+            {
+                $set: {
+                    avgScore: { $divide: ["$scoreTotal", "$checkCount"] }
+                }
+            },
+            {
+                $set: {
+                    riskLevel: {
+                        $switch: {
+                            branches: [
+                                { case: { $gte: ["$avgScore", 70] }, then: "LOW" },
+                                { case: { $gte: ["$avgScore", 40] }, then: "MEDIUM" }
+                            ],
+                            default: "HIGH"
+                        }
+                    }
+                }
+            }
+        ],
+        { upsert: true, returnDocument: "after" }
+    ));
 
-        return {
-            checkCount,
-            firstCheck,
-            lastCheck: timestamp,
-            avgScore,
-            riskLevel
-        };
-    } catch (err) {
-        console.error("Errore salvataggio analisi:", err);
-        return creaStatsDefault(score, timestamp);
-    }
+    return creaStatsDaDocumento(statsDocument as Partial<UrlStatsDocument> | null, score, timestamp);
 }
 
 function creaStatsDefault(score: number, timestamp: Date): StatsSummary {
@@ -360,6 +910,41 @@ function creaStatsDefault(score: number, timestamp: Date): StatsSummary {
         avgScore: score,
         riskLevel: calcolaLivelloRischio(score)
     };
+}
+
+function creaStatsDaDocumento(
+    document: Partial<UrlStatsDocument> | null | undefined,
+    fallbackScore: number,
+    fallbackTimestamp: Date
+): StatsSummary | null {
+    if (!document) {
+        return null;
+    }
+
+    const checkCount = normalizzaNumero(document.checkCount, 1);
+    const avgScore = normalizzaNumero(document.avgScore, fallbackScore);
+    const riskLevel = normalizzaRiskLevel(document.riskLevel) || calcolaLivelloRischio(avgScore);
+
+    return {
+        checkCount,
+        firstCheck: normalizzaData(document.firstCheck) || fallbackTimestamp,
+        lastCheck: normalizzaData(document.lastCheck) || fallbackTimestamp,
+        avgScore,
+        riskLevel
+    };
+}
+
+function normalizzaNumero(value: unknown, fallback: number): number {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function normalizzaRiskLevel(value: unknown): RiskLevel | null {
+    if (value === "LOW" || value === "MEDIUM" || value === "HIGH") {
+        return value;
+    }
+
+    return null;
 }
 
 function normalizzaData(value: unknown): Date | null {
@@ -382,7 +967,7 @@ function verificaUrl(url: string): UrlMetrics {
         const sld = parts[parts.length - 2] || "";
 
         const tldRischiosi = /\.(xyz|tk|top|click|gq|ml|cf|ga|pw|icu|buzz|rest|skin|monster|cyou|cc|ws|su)$/i;
-        const isIp = /^(\d{1,3}\.){3}\d{1,3}$/.test(hostname);
+        const isIp = isIpLiteral(hostname);
         const paroleSospetteSld = /login|secure|verify|paypa|amaz0n|amaz|ebay1|account|update|confirm|banking|wallet|signin/i;
         const trattinoMultiplo = (sld.match(/-/g) || []).length >= 2;
         const sottodominiEccessivi = parts.length > 3 && !hostname.startsWith("www.");
@@ -574,4 +1159,18 @@ app.use(function (
 
     console.error("ERRORE:", err.stack);
     res.status(500).json({ error: "Errore interno del server" });
+});
+
+async function avviaServer(): Promise<void> {
+    await inizializzaDatabase();
+    await caricaBlacklist();
+
+    server = app.listen(port, function () {
+        console.log("Server in ascolto sulla porta " + port);
+    });
+}
+
+avviaServer().catch(err => {
+    console.error("Errore avvio server:", err);
+    process.exit(1);
 });

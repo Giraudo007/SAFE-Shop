@@ -93,7 +93,12 @@ async function analizza(urlSuggerito) {
         aggiornaRisultato(punteggio);
         aggiornaDettagli(dati);
         aggiornaStats(dati.stats);
-        mostraFeedback("Analisi completata.", "success");
+        mostraFeedback(
+            dati.giaPresente
+                ? "Sito gia presente in MongoDB: non aggiunto di nuovo."
+                : "Analisi completata.",
+            "success"
+        );
     } catch (err) {
         const message = err instanceof Error ? err.message : "Errore durante l'analisi.";
         mostraFeedback(message, "error");
@@ -139,11 +144,47 @@ function aggiornaDettagli(dati) {
     setText("recensioni", formatScore(dati.recensioni));
     setText("reputazione", formatScore(dati.reputazione));
     setText("eta", formatScore(dati.eta));
-    setText("ip", dati.ip || "non trovato");
+    aggiornaInfrastruttura(dati);
     setText("blacklist", dati.blacklist ? "Presente" : "Non presente");
 
     const blacklistCard = document.getElementById("blacklistCard");
     blacklistCard.classList.toggle("is-danger", Boolean(dati.blacklist));
+}
+
+function aggiornaInfrastruttura(dati) {
+    const info = dati.ipInfo || {};
+    const ipCard = document.getElementById("ipCard");
+    const ips = formatIpList(info);
+    const label = info.label || (dati.ip && dati.ip !== "non trovato" ? "DNS OK" : "DNS non risolto");
+    const note = info.note || "L'IP e un segnale tecnico, non una garanzia assoluta.";
+    const status = info.status || (dati.ip && dati.ip !== "non trovato" ? "OK" : "WARNING");
+
+    setText("ipStatus", label);
+    setText("ip", ips);
+    setText("ipNote", note);
+
+    ipCard.classList.toggle("is-success", status === "OK");
+    ipCard.classList.toggle("is-warning", status !== "OK");
+}
+
+function formatIpList(info) {
+    const ipv4 = Array.isArray(info.ipv4) ? info.ipv4 : [];
+    const ipv6 = Array.isArray(info.ipv6) ? info.ipv6 : [];
+    const parts = [];
+
+    if (ipv4.length > 0) {
+        parts.push("IPv4: " + ipv4.slice(0, 3).join(", "));
+    }
+
+    if (ipv6.length > 0) {
+        parts.push("IPv6: " + ipv6.slice(0, 2).join(", "));
+    }
+
+    if (parts.length === 0 && info.primary && info.primary !== "non trovato") {
+        parts.push("IP: " + info.primary);
+    }
+
+    return parts.length > 0 ? parts.join(" | ") : "Nessun IP trovato";
 }
 
 function aggiornaStats(stats) {
