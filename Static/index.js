@@ -83,6 +83,7 @@ async function analizza(urlSuggerito) {
         return;
     }
 
+    resetAnalisi();
     setLoading(true);
     mostraFeedback("", "");
 
@@ -93,18 +94,48 @@ async function analizza(urlSuggerito) {
         aggiornaRisultato(punteggio);
         aggiornaDettagli(dati);
         aggiornaStats(dati.stats);
-        mostraFeedback(
-            dati.giaPresente
-                ? "Sito gia presente in MongoDB: non aggiunto di nuovo."
-                : "Analisi completata.",
-            "success"
-        );
+        mostraFeedback("Analisi completata.", "success");
     } catch (err) {
         const message = err instanceof Error ? err.message : "Errore durante l'analisi.";
         mostraFeedback(message, "error");
     } finally {
         setLoading(false);
     }
+}
+
+function resetAnalisi() {
+    const lblPercentuale = document.getElementById("lblPercentuale");
+    const lblLivello = document.getElementById("lblLivello");
+    const circle = document.querySelector(".score-circle");
+    const ipCard = document.getElementById("ipCard");
+    const blacklistCard = document.getElementById("blacklistCard");
+    const riskLevel = document.getElementById("riskLevel");
+
+    lblPercentuale.innerText = "--%";
+    lblPercentuale.style.color = "var(--text)";
+    lblLivello.innerText = "In attesa di analisi";
+
+    circle.classList.remove("risk-low", "risk-medium", "risk-high");
+
+    setText("dominio", "--");
+    setText("https", "--");
+    setText("recensioni", "--");
+    setText("reputazione", "--");
+    setText("eta", "--");
+    setText("ipStatus", "--");
+    setText("ip", "IP non ancora verificato");
+    setText("ipNote", "Stato tecnico del dominio");
+    setText("blacklist", "--");
+
+    ipCard.classList.remove("is-success", "is-warning");
+    blacklistCard.classList.remove("is-danger");
+
+    setText("checkCount", "0");
+    setText("avgScore", "-");
+    setText("firstCheck", "-");
+    setText("lastCheck", "-");
+    riskLevel.innerText = "-";
+    riskLevel.style.color = "var(--text)";
 }
 
 function calcolaPunteggio(dati) {

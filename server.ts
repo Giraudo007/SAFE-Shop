@@ -52,11 +52,6 @@ type UrlStatsDocument = StatsSummary & {
     scoreTotal: number;
 };
 
-type SaveAnalysisResult = {
-    stats: StatsSummary;
-    alreadyStored: boolean;
-};
-
 // B. configurazioni
 dotenv.config({ path: ".env", quiet: true });
 
@@ -138,14 +133,13 @@ app.post("/api/analizza", async (req, res) => {
             ipInfo,
             blacklist: blacklistTrovata
         };
-        const saveResult = await salvaAnalisi(url, hostname, score, results);
+        const stats = await salvaAnalisi(url, hostname, score, results);
 
         res.json({
             ...results,
             score,
             hostname,
-            stats: saveResult.stats,
-            giaPresente: saveResult.alreadyStored
+            stats
         });
     } catch (err) {
         console.error("Errore analisi:", err);
@@ -753,18 +747,15 @@ async function salvaAnalisi(
     hostname: string,
     score: number,
     results: AnalysisStoredResult
-): Promise<SaveAnalysisResult> {
+): Promise<StatsSummary> {
     const timestamp = new Date();
 
     try {
         const existingStats = await trovaStatsEsistenti(hostname, score, timestamp);
 
         if (existingStats) {
-            console.log("Hostname gia presente in MongoDB, salto inserimento:", hostname);
-            return {
-                stats: existingStats,
-                alreadyStored: true
-            };
+            console.log("Salvataggio non necessario per hostname:", hostname);
+            return existingStats;
         }
 
         console.log("💾 Inizio salvataggio per hostname:", hostname);
@@ -782,10 +773,7 @@ async function salvaAnalisi(
 
         if (!insertResult) {
             console.warn("Database non disponibile - ritorno stats default");
-            return {
-                stats: creaStatsDefault(score, timestamp),
-                alreadyStored: false
-            };
+            return creaStatsDefault(score, timestamp);
         }
         
         console.log("✅ Inserito in url_checks con ID:", insertResult.insertedId);
@@ -796,24 +784,15 @@ async function salvaAnalisi(
 
         if (!stats) {
             console.warn("Database non disponibile durante aggiornamento stats - ritorno stats default");
-            return {
-                stats: creaStatsDefault(score, timestamp),
-                alreadyStored: false
-            };
+            return creaStatsDefault(score, timestamp);
         }
 
         console.log("✅ Salvataggio completato!");
 
-        return {
-            stats,
-            alreadyStored: false
-        };
+        return stats;
     } catch (err) {
         console.error("❌ ERRORE salvataggio analisi:", err);
-        return {
-            stats: creaStatsDefault(score, timestamp),
-            alreadyStored: false
-        };
+        return creaStatsDefault(score, timestamp);
     }
 }
 
