@@ -121,10 +121,30 @@
         <p class="detail-desc">Presenza in liste di rischio</p>
       </div>
 
-      <div id="virusTotalCard" class="detail-card">
-        <p class="detail-label">VirusTotal</p>
-        <strong id="virusTotalStatus" class="detail-value">--</strong>
-        <p id="virusTotalStats" class="detail-desc">Controllo non ancora eseguito</p>
+      <div id="virusTotalCard" class="detail-card virus-total-card vt-muted">
+        <div class="virus-total-head">
+          <div>
+            <p class="detail-label">VirusTotal</p>
+            <strong id="virusTotalStatus" class="detail-value virus-total-title">--</strong>
+          </div>
+          <span id="virusTotalBadge" class="virus-total-badge">In attesa</span>
+        </div>
+
+        <div id="virusTotalStats" class="virus-total-metrics" aria-label="Statistiche VirusTotal">
+          <div class="virus-total-metric metric-danger">
+            <span>Malware</span>
+            <strong id="virusTotalMalicious">--</strong>
+          </div>
+          <div class="virus-total-metric metric-warning">
+            <span>Sospetti</span>
+            <strong id="virusTotalSuspicious">--</strong>
+          </div>
+          <div class="virus-total-metric metric-success">
+            <span>Puliti</span>
+            <strong id="virusTotalClean">--</strong>
+          </div>
+        </div>
+
         <p id="virusTotalNote" class="detail-desc">Reputazione malware del dominio o IP</p>
       </div>
     </section>

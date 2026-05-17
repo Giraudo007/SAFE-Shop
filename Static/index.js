@@ -2,6 +2,8 @@
 
 let isLoading = false;
 
+const virusTotalCardClasses = ["is-success", "is-warning", "is-danger", "vt-clean", "vt-warning", "vt-danger", "vt-muted"];
+
 const popularSites = [
     {
         name: "Temu",
@@ -128,12 +130,15 @@ function resetAnalisi() {
     setText("ipNote", "Stato tecnico del dominio");
     setText("blacklist", "--");
     setText("virusTotalStatus", "--");
-    setText("virusTotalStats", "Controllo non ancora eseguito");
+    setText("virusTotalBadge", "In attesa");
+    setText("virusTotalMalicious", "--");
+    setText("virusTotalSuspicious", "--");
+    setText("virusTotalClean", "--");
     setText("virusTotalNote", "Reputazione malware del dominio o IP");
 
     ipCard.classList.remove("is-success", "is-warning");
     blacklistCard.classList.remove("is-danger");
-    virusTotalCard.classList.remove("is-success", "is-warning", "is-danger");
+    setVirusTotalCardState(virusTotalCard, "vt-muted");
 
     setText("checkCount", "0");
     setText("avgScore", "-");
@@ -209,26 +214,72 @@ function aggiornaVirusTotal(info) {
 
     if (!info) {
         setText("virusTotalStatus", "Non disponibile");
-        setText("virusTotalStats", "Nessun dato ricevuto");
+        setText("virusTotalBadge", "Non disponibile");
+        setText("virusTotalMalicious", "0");
+        setText("virusTotalSuspicious", "0");
+        setText("virusTotalClean", "0");
         setText("virusTotalNote", "Il controllo VirusTotal non ha restituito risultati.");
-        virusTotalCard.classList.remove("is-success", "is-warning", "is-danger");
+        setVirusTotalCardState(virusTotalCard, "vt-muted");
         return;
     }
 
+    const malicious = normalizzaConteggio(info.malicious);
+    const suspicious = normalizzaConteggio(info.suspicious);
+    const clean = normalizzaConteggio(info.clean);
+    const view = getVirusTotalView(info, malicious, suspicious, clean);
+
     setText("virusTotalStatus", info.label || "Non disponibile");
-    setText(
-        "virusTotalStats",
-        info.checked
-            ? "Malware: " + formatCount(info.malicious) + " | Sospetti: " + formatCount(info.suspicious) + " | Puliti: " + formatCount(info.clean)
-            : "Controllo non eseguito"
-    );
+    setText("virusTotalBadge", view.badge);
+    setText("virusTotalMalicious", formatCount(malicious));
+    setText("virusTotalSuspicious", formatCount(suspicious));
+    setText("virusTotalClean", formatCount(clean));
+    setText("virusTotalNote", formatVirusTotalNote(info));
 
+    setVirusTotalCardState(virusTotalCard, view.className);
+}
+
+function getVirusTotalView(info, malicious, suspicious, clean) {
+    if (malicious > 0 || info.status === "MALICIOUS") {
+        return { badge: "Bloccato", className: "vt-danger" };
+    }
+
+    if (suspicious > 0 || info.status === "SUSPICIOUS") {
+        return { badge: "Da verificare", className: "vt-warning" };
+    }
+
+    if (info.status === "CLEAN" || clean > 0) {
+        return { badge: "Pulito", className: "vt-clean" };
+    }
+
+    if (info.status === "UNAVAILABLE") {
+        return { badge: "Non raggiunto", className: "vt-warning" };
+    }
+
+    if (info.status === "NOT_CONFIGURED") {
+        return { badge: "Non attivo", className: "vt-muted" };
+    }
+
+    if (info.status === "NOT_FOUND") {
+        return { badge: "Nessun dato", className: "vt-muted" };
+    }
+
+    return { badge: "Neutro", className: "vt-muted" };
+}
+
+function formatVirusTotalNote(info) {
+    const note = info.note || "Stato VirusTotal non disponibile.";
     const lastUpdate = info.lastUpdate ? " Ultimo aggiornamento: " + formatDate(info.lastUpdate) + "." : "";
-    setText("virusTotalNote", (info.note || "Stato VirusTotal non disponibile.") + lastUpdate);
+    return note + lastUpdate;
+}
 
-    virusTotalCard.classList.toggle("is-danger", Number(info.malicious) > 0 || info.status === "MALICIOUS");
-    virusTotalCard.classList.toggle("is-warning", Number(info.malicious) === 0 && (Number(info.suspicious) > 0 || info.status === "SUSPICIOUS" || info.status === "UNAVAILABLE"));
-    virusTotalCard.classList.toggle("is-success", info.status === "CLEAN");
+function setVirusTotalCardState(card, className) {
+    card.classList.remove(...virusTotalCardClasses);
+    card.classList.add(className);
+}
+
+function normalizzaConteggio(value) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed > 0 ? Math.trunc(parsed) : 0;
 }
 
 function formatIpList(info) {

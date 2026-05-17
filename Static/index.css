@@ -328,6 +328,145 @@ header {
   line-height: 1.5;
 }
 
+.virus-total-card {
+  position: relative;
+  gap: 14px;
+  overflow: hidden;
+  padding: 20px;
+  background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
+  border-color: rgba(148, 163, 184, 0.45);
+}
+
+.virus-total-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 5px;
+  background: #94a3b8;
+}
+
+.virus-total-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  min-width: 0;
+}
+
+.virus-total-title {
+  display: block;
+  margin-top: 4px;
+  font-size: 22px;
+}
+
+.virus-total-badge {
+  flex: 0 0 auto;
+  max-width: 150px;
+  padding: 5px 9px;
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  border-radius: var(--radius);
+  background: #f8fafc;
+  color: var(--text-light);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.25;
+  text-align: center;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.virus-total-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.virus-total-metric {
+  min-width: 0;
+  padding: 10px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.virus-total-metric span {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--text-light);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.virus-total-metric strong {
+  display: block;
+  color: var(--text);
+  font-size: 22px;
+  line-height: 1.1;
+}
+
+.metric-danger strong {
+  color: #dc2626;
+}
+
+.metric-warning strong {
+  color: #b45309;
+}
+
+.metric-success strong {
+  color: #15803d;
+}
+
+.virus-total-card.vt-clean {
+  border-color: rgba(34, 197, 94, 0.5);
+  background: linear-gradient(135deg, #ffffff 0%, #f0fdf4 100%);
+}
+
+.virus-total-card.vt-clean::before {
+  background: var(--green);
+}
+
+.virus-total-card.vt-clean .virus-total-badge {
+  background: #dcfce7;
+  border-color: #bbf7d0;
+  color: #166534;
+}
+
+.virus-total-card.vt-warning {
+  border-color: rgba(217, 119, 6, 0.48);
+  background: linear-gradient(135deg, #ffffff 0%, #fffbeb 100%);
+}
+
+.virus-total-card.vt-warning::before {
+  background: var(--yellow);
+}
+
+.virus-total-card.vt-warning .virus-total-badge {
+  background: #fef3c7;
+  border-color: #fde68a;
+  color: #92400e;
+}
+
+.virus-total-card.vt-danger {
+  border-color: rgba(239, 68, 68, 0.58);
+  background: linear-gradient(135deg, #ffffff 0%, #fff5f5 100%);
+}
+
+.virus-total-card.vt-danger::before {
+  background: var(--red);
+}
+
+.virus-total-card.vt-danger .virus-total-badge {
+  background: #fee2e2;
+  border-color: #fecaca;
+  color: #991b1b;
+}
+
+.virus-total-card.vt-muted::before {
+  background: #94a3b8;
+}
+
 .stats-card {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
@@ -510,6 +649,10 @@ footer {
   .detail-card:nth-child(n + 5) {
     grid-column: span 4;
   }
+
+  .detail-card.virus-total-card {
+    grid-column: 1 / -1;
+  }
 }
 
 @media (max-width: 560px) {
@@ -535,6 +678,18 @@ footer {
 
   .detail-value {
     font-size: 22px;
+  }
+
+  .virus-total-head {
+    flex-direction: column;
+  }
+
+  .virus-total-badge {
+    max-width: none;
+  }
+
+  .virus-total-metrics {
+    grid-template-columns: 1fr;
   }
 
   .popular-site-head {
