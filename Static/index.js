@@ -109,6 +109,7 @@ function resetAnalisi() {
     const circle = document.querySelector(".score-circle");
     const ipCard = document.getElementById("ipCard");
     const blacklistCard = document.getElementById("blacklistCard");
+    const virusTotalCard = document.getElementById("virusTotalCard");
     const riskLevel = document.getElementById("riskLevel");
 
     lblPercentuale.innerText = "--%";
@@ -126,9 +127,13 @@ function resetAnalisi() {
     setText("ip", "IP non ancora verificato");
     setText("ipNote", "Stato tecnico del dominio");
     setText("blacklist", "--");
+    setText("virusTotalStatus", "--");
+    setText("virusTotalStats", "Controllo non ancora eseguito");
+    setText("virusTotalNote", "Reputazione malware del dominio o IP");
 
     ipCard.classList.remove("is-success", "is-warning");
     blacklistCard.classList.remove("is-danger");
+    virusTotalCard.classList.remove("is-success", "is-warning", "is-danger");
 
     setText("checkCount", "0");
     setText("avgScore", "-");
@@ -177,6 +182,7 @@ function aggiornaDettagli(dati) {
     setText("eta", formatScore(dati.eta));
     aggiornaInfrastruttura(dati);
     setText("blacklist", dati.blacklist ? "Presente" : "Non presente");
+    aggiornaVirusTotal(dati.virusTotal);
 
     const blacklistCard = document.getElementById("blacklistCard");
     blacklistCard.classList.toggle("is-danger", Boolean(dati.blacklist));
@@ -196,6 +202,33 @@ function aggiornaInfrastruttura(dati) {
 
     ipCard.classList.toggle("is-success", status === "OK");
     ipCard.classList.toggle("is-warning", status !== "OK");
+}
+
+function aggiornaVirusTotal(info) {
+    const virusTotalCard = document.getElementById("virusTotalCard");
+
+    if (!info) {
+        setText("virusTotalStatus", "Non disponibile");
+        setText("virusTotalStats", "Nessun dato ricevuto");
+        setText("virusTotalNote", "Il controllo VirusTotal non ha restituito risultati.");
+        virusTotalCard.classList.remove("is-success", "is-warning", "is-danger");
+        return;
+    }
+
+    setText("virusTotalStatus", info.label || "Non disponibile");
+    setText(
+        "virusTotalStats",
+        info.checked
+            ? "Malware: " + formatCount(info.malicious) + " | Sospetti: " + formatCount(info.suspicious) + " | Puliti: " + formatCount(info.clean)
+            : "Controllo non eseguito"
+    );
+
+    const lastUpdate = info.lastUpdate ? " Ultimo aggiornamento: " + formatDate(info.lastUpdate) + "." : "";
+    setText("virusTotalNote", (info.note || "Stato VirusTotal non disponibile.") + lastUpdate);
+
+    virusTotalCard.classList.toggle("is-danger", Number(info.malicious) > 0 || info.status === "MALICIOUS");
+    virusTotalCard.classList.toggle("is-warning", Number(info.malicious) === 0 && (Number(info.suspicious) > 0 || info.status === "SUSPICIOUS" || info.status === "UNAVAILABLE"));
+    virusTotalCard.classList.toggle("is-success", info.status === "CLEAN");
 }
 
 function formatIpList(info) {
@@ -340,6 +373,11 @@ function limitaPunteggio(value) {
 
 function formatScore(value) {
     return limitaPunteggio(value) + "/100";
+}
+
+function formatCount(value) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? String(parsed) : "0";
 }
 
 function formatDate(value) {

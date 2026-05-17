@@ -31,11 +31,41 @@ type IpInfo = {
     usesCdn: boolean;
 };
 
+type VirusTotalStatus = "NOT_CONFIGURED" | "NOT_FOUND" | "CLEAN" | "SUSPICIOUS" | "MALICIOUS" | "UNAVAILABLE";
+
+type VirusTotalInfo = {
+    checked: boolean;
+    malicious: number;
+    suspicious: number;
+    clean: number;
+    lastUpdate: Date | null;
+    status: VirusTotalStatus;
+    label: string;
+    note: string;
+};
+
 type AnalysisStoredResult = UrlMetrics & {
     eta: number;
     ip: string;
     ipInfo: IpInfo;
     blacklist: boolean;
+    virusTotal: VirusTotalInfo;
+};
+
+type VirusTotalApiStats = {
+    malicious?: number;
+    suspicious?: number;
+    undetected?: number;
+    harmless?: number;
+};
+
+type VirusTotalApiResponse = {
+    data?: {
+        attributes?: {
+            last_analysis_stats?: VirusTotalApiStats;
+            last_analysis_date?: number;
+        };
+    };
 };
 
 type StatsSummary = {
@@ -62,6 +92,8 @@ const port = Number.parseInt(process.env.PORT || "3000", 10);
 const mongoDisabled = /^(1|true|yes)$/i.test(process.env.MONGODB_DISABLED || "");
 const checkHistoryRetentionDays = parsePositiveInteger(process.env.URL_CHECK_RETENTION_DAYS, 30);
 const checkHistoryRetentionSeconds = checkHistoryRetentionDays * 24 * 60 * 60;
+const virusTotalApiKey = process.env.VIRUSTOTAL_API_KEY || "";
+const virusTotalTimeoutMs = parsePositiveInteger(process.env.VIRUSTOTAL_TIMEOUT_MS, 8000);
 
 let blacklist = new Set<string>();
 let db: Db | undefined;
@@ -111,6 +143,8 @@ app.post("/api/analizza", async (req, res) => {
 
         let metriche: UrlMetrics;
         let eta: number;
+        let virusTotal: VirusTotalInfo;
+        const virusTotalPromise = controllaVirusTotal(hostname);
 
         if (blacklistTrovata) {
             metriche = {
@@ -120,18 +154,26 @@ app.post("/api/analizza", async (req, res) => {
                 reputazione: 0
             };
             eta = 0;
+            virusTotal = await virusTotalPromise;
         } else {
-            eta = await calcolaEtaDominio(hostname);
+            const [etaDominio, virusTotalResult] = await Promise.all([
+                calcolaEtaDominio(hostname),
+                virusTotalPromise
+            ]);
+
+            eta = etaDominio;
+            virusTotal = virusTotalResult;
             metriche = verificaUrl(url);
         }
 
-        const score = blacklistTrovata ? 0 : calcolaPunteggio(metriche, eta);
+        const score = blacklistTrovata ? 0 : calcolaPunteggio(metriche, eta, virusTotal);
         const results: AnalysisStoredResult = {
             ...metriche,
             eta,
             ip: ipInfo.primary,
             ipInfo,
-            blacklist: blacklistTrovata
+            blacklist: blacklistTrovata,
+            virusTotal
         };
         const stats = await salvaAnalisi(url, hostname, score, results);
 
@@ -252,7 +294,7 @@ async function configuraPuliziaStorico(database: Db): Promise<void> {
     const timestampIndex = indexes.find(index => isTimestampIndexKey(index.key));
 
     if (timestampIndex) {
-        if (timestampIndex.expireAfterSeconds !== checkHistoryRetentionSeconds) {
+        if (timestampIndex.expireAfterSeconds != checkHistoryRetentionSeconds) {
             await database.command({
                 collMod: "url_checks",
                 index: {
@@ -278,12 +320,12 @@ async function configuraPuliziaStorico(database: Db): Promise<void> {
 }
 
 function isTimestampIndexKey(key: unknown): boolean {
-    if (!key || typeof key !== "object") {
+    if (!key || typeof key != "object") {
         return false;
     }
 
     const fields = Object.entries(key as Record<string, unknown>);
-    return fields.length === 1 && fields[0]?.[0] === "timestamp" && fields[0]?.[1] === 1;
+    return fields.length == 1 && fields[0]?.[0] == "timestamp" && fields[0]?.[1] == 1;
 }
 
 function parsePositiveInteger(value: string | undefined, fallback: number): number {
@@ -310,7 +352,7 @@ async function resetDatabaseConnection(): Promise<void> {
 }
 
 function isMongoNotConnectedError(err: unknown): boolean {
-    return err instanceof Error && err.name === "MongoNotConnectedError";
+    return err instanceof Error && err.name == "MongoNotConnectedError";
 }
 
 async function withMongoRetry<T>(operation: (database: Db) => Promise<T>): Promise<T | null> {
@@ -349,7 +391,7 @@ async function caricaBlacklist() {
         const data = response.data;
         const valori = Array.isArray(data)
             ? data
-            : data && typeof data === "object"
+            : data && typeof data == "object"
                 ? Object.values(data).flat()
                 : [];
 
@@ -367,7 +409,7 @@ async function caricaBlacklist() {
 }
 
 function normalizzaUrlInput(rawUrl: unknown): URL {
-    if (typeof rawUrl !== "string" || !rawUrl.trim()) {
+    if (typeof rawUrl != "string" || !rawUrl.trim()) {
         throw new UserInputError("Inserisci un URL, dominio o IP da analizzare.");
     }
 
@@ -376,7 +418,7 @@ function normalizzaUrlInput(rawUrl: unknown): URL {
     const value = hasProtocol ? trimmed : "https://" + trimmed;
     const parsed = new URL(value);
 
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    if (parsed.protocol != "http:" && parsed.protocol != "https:") {
         throw new UserInputError("Protocollo non supportato: usa http o https.");
     }
 
@@ -405,12 +447,12 @@ function normalizzaHostname(hostname: string | undefined): string {
 function normalizzaVoceBlacklist(value: unknown): string | null {
     let raw: string | undefined;
 
-    if (typeof value === "string") {
+    if (typeof value == "string") {
         raw = value;
-    } else if (value && typeof value === "object") {
+    } else if (value && typeof value == "object") {
         const item = value as Record<string, unknown>;
         const candidate = item.domain || item.hostname || item.host || item.url;
-        if (typeof candidate === "string") {
+        if (typeof candidate == "string") {
             raw = candidate;
         }
     }
@@ -458,13 +500,13 @@ async function analizzaInfrastrutturaIp(hostname: string): Promise<IpInfo> {
     const normalizedHost = normalizzaHostname(hostname);
     const ipVersion = net.isIP(normalizedHost);
 
-    if (ipVersion !== 0) {
+    if (ipVersion != 0) {
         const isPublic = isIpPubblico(normalizedHost);
 
         return {
             primary: normalizedHost,
-            ipv4: ipVersion === 4 ? [normalizedHost] : [],
-            ipv6: ipVersion === 6 ? [normalizedHost] : [],
+            ipv4: ipVersion == 4 ? [normalizedHost] : [],
+            ipv6: ipVersion == 6 ? [normalizedHost] : [],
             resolved: isPublic,
             status: isPublic ? "OK" : "WARNING",
             label: isPublic ? "IP valido" : "IP non pubblico",
@@ -487,7 +529,7 @@ async function analizzaInfrastrutturaIp(hostname: string): Promise<IpInfo> {
     const provider = identificaProviderInfrastruttura(cname, allIps);
     const usesCdn = Boolean(provider);
 
-    if (allIps.length === 0) {
+    if (allIps.length == 0) {
         return {
             primary: "non trovato",
             ipv4,
@@ -555,11 +597,168 @@ function validaEsistenzaRicerca(hostname: string, ipInfo: IpInfo, blacklistTrova
         throw new UserInputError("L'IP inserito non e pubblico o non puo essere verificato come indirizzo raggiungibile da Internet.");
     }
 
-    if (ipInfo.label === "IP non pubblico") {
+    if (ipInfo.label == "IP non pubblico") {
         throw new UserInputError("Il dominio inserito esiste, ma punta solo a IP privati o riservati.");
     }
 
     throw new UserInputError("Il dominio inserito non esiste o non restituisce un IP valido. Controlla il nome e riprova.");
+}
+
+async function controllaVirusTotal(hostname: string): Promise<VirusTotalInfo> {
+    if (!virusTotalApiKey) {
+        return creaVirusTotalInfo(
+            "NOT_CONFIGURED",
+            false,
+            0,
+            0,
+            0,
+            null,
+            "Non configurato",
+            "Aggiungi VIRUSTOTAL_API_KEY al file .env per abilitare il controllo."
+        );
+    }
+
+    const normalizedHost = normalizzaHostname(hostname);
+    const resource = net.isIP(normalizedHost) ? "ip_addresses" : "domains";
+
+    try {
+        const response = await axios.get<VirusTotalApiResponse>(
+            `https://www.virustotal.com/api/v3/${resource}/${encodeURIComponent(normalizedHost)}`,
+            {
+                headers: { "x-apikey": virusTotalApiKey },
+                timeout: virusTotalTimeoutMs
+            }
+        );
+
+        const attributes = response.data.data?.attributes;
+        const stats = attributes?.last_analysis_stats || {};
+        const malicious = normalizzaConteggio(stats.malicious);
+        const suspicious = normalizzaConteggio(stats.suspicious);
+        const clean = normalizzaConteggio(stats.undetected) + normalizzaConteggio(stats.harmless);
+        const lastUpdate = normalizzaUnixDate(attributes?.last_analysis_date);
+
+        if (malicious > 0) {
+            return creaVirusTotalInfo(
+                "MALICIOUS",
+                true,
+                malicious,
+                suspicious,
+                clean,
+                lastUpdate,
+                "Malware rilevato",
+                "VirusTotal segnala rilevazioni malevole: il punteggio viene bloccato a zero."
+            );
+        }
+
+        if (suspicious > 0) {
+            return creaVirusTotalInfo(
+                "SUSPICIOUS",
+                true,
+                malicious,
+                suspicious,
+                clean,
+                lastUpdate,
+                "Sospetto",
+                "VirusTotal segnala rilevazioni sospette: il punteggio viene penalizzato."
+            );
+        }
+
+        if (clean > 0) {
+            return creaVirusTotalInfo(
+                "CLEAN",
+                true,
+                malicious,
+                suspicious,
+                clean,
+                lastUpdate,
+                "Nessun rilevamento",
+                "VirusTotal non riporta rilevazioni malevole o sospette."
+            );
+        }
+
+        return creaVirusTotalInfo(
+            "NOT_FOUND",
+            true,
+            0,
+            0,
+            0,
+            lastUpdate,
+            "Nessun dato",
+            "VirusTotal non ha analisi utili per questo dominio o IP."
+        );
+    } catch (err) {
+        if (axios.isAxiosError(err) && err.response?.status == 404) {
+            return creaVirusTotalInfo(
+                "NOT_FOUND",
+                true,
+                0,
+                0,
+                0,
+                null,
+                "Nessun dato",
+                "VirusTotal non conosce ancora questo dominio o IP."
+            );
+        }
+
+        console.warn("VirusTotal non disponibile:", descriviErroreEsterno(err));
+        return creaVirusTotalInfo(
+            "UNAVAILABLE",
+            false,
+            0,
+            0,
+            0,
+            null,
+            "Non disponibile",
+            "Controllo VirusTotal non riuscito: il punteggio non viene penalizzato."
+        );
+    }
+}
+
+function creaVirusTotalInfo(
+    status: VirusTotalStatus,
+    checked: boolean,
+    malicious: number,
+    suspicious: number,
+    clean: number,
+    lastUpdate: Date | null,
+    label: string,
+    note: string
+): VirusTotalInfo {
+    return {
+        checked,
+        malicious,
+        suspicious,
+        clean,
+        lastUpdate,
+        status,
+        label,
+        note
+    };
+}
+
+function normalizzaConteggio(value: unknown): number {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed > 0 ? Math.trunc(parsed) : 0;
+}
+
+function normalizzaUnixDate(value: unknown): Date | null {
+    const parsed = Number(value);
+
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+        return null;
+    }
+
+    const date = new Date(parsed * 1000);
+    return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function descriviErroreEsterno(err: unknown): string {
+    if (axios.isAxiosError(err)) {
+        const status = err.response?.status ? `HTTP ${err.response.status}` : err.code || "errore rete";
+        return `${status}: ${err.message}`;
+    }
+
+    return err instanceof Error ? err.message : String(err);
 }
 
 async function risolviRecordDns<T>(resolver: () => Promise<T[]>): Promise<T[]> {
@@ -598,7 +797,7 @@ function identificaProviderInfrastruttura(cnameRecords: string[], ips: string[])
 }
 
 function isIpLiteral(value: string): boolean {
-    return net.isIP(normalizzaHostname(value)) !== 0;
+    return net.isIP(normalizzaHostname(value)) != 0;
 }
 
 function isDominioPubblicoValido(hostname: string): boolean {
@@ -626,11 +825,11 @@ function isIpPubblico(ip: string): boolean {
     const normalizedIp = normalizzaHostname(ip);
     const ipVersion = net.isIP(normalizedIp);
 
-    if (ipVersion === 4) {
+    if (ipVersion == 4) {
         return isIpv4Pubblico(normalizedIp);
     }
 
-    if (ipVersion === 6) {
+    if (ipVersion == 6) {
         return isIpv6Pubblico(normalizedIp);
     }
 
@@ -919,8 +1118,8 @@ function normalizzaNumero(value: unknown, fallback: number): number {
 }
 
 function normalizzaRiskLevel(value: unknown): RiskLevel | null {
-    if (value === "LOW" || value === "MEDIUM" || value === "HIGH") {
-        return value;
+    if (value == "LOW" || value == "MEDIUM" || value == "HIGH") {
+        return value as RiskLevel;
     }
 
     return null;
@@ -995,7 +1194,7 @@ function verificaUrl(url: string): UrlMetrics {
         const fileEseguibile = /\.(exe|bat|msi|dmg|apk|zip|rar|7z)$/i;
         const encodingSospetto = (fullUrl.match(/%[0-9a-f]{2}/gi) || []).length > 5;
 
-        if (https === 100) reputazione += 20;
+        if (https == 100) reputazione += 20;
         if (paroleRosse.test(fullUrl)) reputazione -= 35;
         if (paroleArancioni.test(pathname)) reputazione -= 15;
         if (redirect.test(pathname)) reputazione -= 20;
@@ -1010,21 +1209,33 @@ function verificaUrl(url: string): UrlMetrics {
     return { dominio, https, recensioni, reputazione };
 }
 
-function calcolaPunteggio(risultato: UrlMetrics, eta: number): number {
+function calcolaPunteggio(risultato: UrlMetrics, eta: number, virusTotal?: VirusTotalInfo): number {
     const dominio = limitaPunteggio(risultato.dominio);
     const https = limitaPunteggio(risultato.https);
     const recensioni = limitaPunteggio(risultato.recensioni);
     const reputazione = limitaPunteggio(risultato.reputazione);
     const etaNorm = limitaPunteggio(eta);
 
-    const punteggio =
+    let punteggio =
         dominio * 0.25 +
         https * 0.15 +
         recensioni * 0.20 +
         reputazione * 0.20 +
         etaNorm * 0.20;
 
-    return Math.round(punteggio);
+    if (virusTotal?.malicious && virusTotal.malicious > 0) {
+        return 0;
+    }
+
+    if (virusTotal?.suspicious && virusTotal.suspicious > 0) {
+        punteggio -= 25;
+    }
+
+    if (virusTotal?.clean && virusTotal.clean > 50) {
+        punteggio += 5;
+    }
+
+    return Math.round(limitaPunteggio(punteggio));
 }
 
 function calcolaLivelloRischio(score: number): RiskLevel {
