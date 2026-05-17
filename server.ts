@@ -82,6 +82,12 @@ type UrlStatsDocument = StatsSummary & {
     scoreTotal: number;
 };
 
+type VirusTotalCacheDocument = {
+    hostname: string;
+    virusTotal: VirusTotalInfo;
+    timestamp: Date;
+};
+
 // B. configurazioni
 dotenv.config({ path: ".env", quiet: true });
 
@@ -94,12 +100,16 @@ const checkHistoryRetentionDays = parsePositiveInteger(process.env.URL_CHECK_RET
 const checkHistoryRetentionSeconds = checkHistoryRetentionDays * 24 * 60 * 60;
 const virusTotalApiKey = process.env.VIRUSTOTAL_API_KEY || "";
 const virusTotalTimeoutMs = parsePositiveInteger(process.env.VIRUSTOTAL_TIMEOUT_MS, 8000);
+const virusTotalCacheDays = parsePositiveInteger(process.env.VIRUSTOTAL_CACHE_DAYS, 30);
+const virusTotalCacheSeconds = virusTotalCacheDays * 24 * 60 * 60;
+const virusTotalCacheMs = virusTotalCacheSeconds * 1000;
 
 let blacklist = new Set<string>();
 let db: Db | undefined;
 let client: MongoClient | undefined;
 let server: ReturnType<typeof app.listen> | undefined;
 let databaseInitPromise: Promise<Db | undefined> | undefined;
+const virusTotalPendingRequests = new Map<string, Promise<VirusTotalInfo>>();
 
 class UserInputError extends Error {
     constructor(message: string) {
@@ -273,6 +283,8 @@ async function creaConnessioneDatabase(): Promise<Db | undefined> {
         const indexesStats = await database.collection("url_stats").createIndex({ hostname: 1 });
         console.log("📍 Indice creato su url_stats:", indexesStats);
 
+        await configuraCacheVirusTotal(database);
+
         client = mongoClient;
         db = database;
 
@@ -317,6 +329,41 @@ async function configuraPuliziaStorico(database: Db): Promise<void> {
     );
 
     console.log(`🧹 Storico url_checks mantenuto per ${checkHistoryRetentionDays} giorni:`, ttlIndex);
+}
+
+async function configuraCacheVirusTotal(database: Db): Promise<void> {
+    const collection = database.collection("virustotal_cache");
+    const hostnameIndex = await collection.createIndex({ hostname: 1 }, { unique: true });
+    console.log("Indice creato su virustotal_cache:", hostnameIndex);
+
+    const ttlIndexName = "virustotal_cache_timestamp_ttl";
+    const indexes = await collection.indexes();
+    const timestampIndex = indexes.find(index => index.name == ttlIndexName || isTimestampIndexKey(index.key));
+
+    if (timestampIndex) {
+        if (timestampIndex.expireAfterSeconds != virusTotalCacheSeconds) {
+            await database.command({
+                collMod: "virustotal_cache",
+                index: {
+                    name: timestampIndex.name,
+                    expireAfterSeconds: virusTotalCacheSeconds
+                }
+            });
+        }
+
+        console.log(`Cache VirusTotal mantenuta per ${virusTotalCacheDays} giorni:`, timestampIndex.name);
+        return;
+    }
+
+    const ttlIndex = await collection.createIndex(
+        { timestamp: 1 },
+        {
+            name: ttlIndexName,
+            expireAfterSeconds: virusTotalCacheSeconds
+        }
+    );
+
+    console.log(`Cache VirusTotal mantenuta per ${virusTotalCacheDays} giorni:`, ttlIndex);
 }
 
 function isTimestampIndexKey(key: unknown): boolean {
@@ -619,6 +666,36 @@ async function controllaVirusTotal(hostname: string): Promise<VirusTotalInfo> {
     }
 
     const normalizedHost = normalizzaHostname(hostname);
+    const pendingRequest = virusTotalPendingRequests.get(normalizedHost);
+
+    if (pendingRequest) {
+        console.log("VirusTotal richiesta gia in corso:", normalizedHost);
+        return pendingRequest;
+    }
+
+    const request = controllaVirusTotalConCache(normalizedHost).finally(() => {
+        virusTotalPendingRequests.delete(normalizedHost);
+    });
+
+    virusTotalPendingRequests.set(normalizedHost, request);
+    return request;
+}
+
+async function controllaVirusTotalConCache(normalizedHost: string): Promise<VirusTotalInfo> {
+    const cachedResult = await trovaVirusTotalCache(normalizedHost);
+
+    if (cachedResult) {
+        console.log("VirusTotal cache hit:", normalizedHost);
+        return cachedResult;
+    }
+
+    const result = await chiediVirusTotalApi(normalizedHost);
+    await salvaVirusTotalCache(normalizedHost, result);
+
+    return result;
+}
+
+async function chiediVirusTotalApi(normalizedHost: string): Promise<VirusTotalInfo> {
     const resource = net.isIP(normalizedHost) ? "ip_addresses" : "domains";
 
     try {
@@ -712,6 +789,94 @@ async function controllaVirusTotal(hostname: string): Promise<VirusTotalInfo> {
             "Controllo VirusTotal non riuscito: il punteggio non viene penalizzato."
         );
     }
+}
+
+async function trovaVirusTotalCache(hostname: string): Promise<VirusTotalInfo | null> {
+    const document = await withMongoRetry(database => database.collection("virustotal_cache").findOne({ hostname }));
+
+    if (!document) {
+        return null;
+    }
+
+    const cacheDocument = document as Partial<VirusTotalCacheDocument>;
+    const timestamp = normalizzaData(cacheDocument.timestamp);
+
+    if (!timestamp || isVirusTotalCacheScaduta(timestamp)) {
+        return null;
+    }
+
+    return normalizzaVirusTotalInfo(cacheDocument.virusTotal);
+}
+
+async function salvaVirusTotalCache(hostname: string, virusTotal: VirusTotalInfo): Promise<void> {
+    if (!deveSalvareVirusTotalCache(virusTotal)) {
+        return;
+    }
+
+    await withMongoRetry(async database => {
+        await database.collection("virustotal_cache").updateOne(
+            { hostname },
+            {
+                $set: {
+                    hostname,
+                    virusTotal,
+                    timestamp: new Date()
+                }
+            },
+            { upsert: true }
+        );
+    });
+}
+
+function deveSalvareVirusTotalCache(virusTotal: VirusTotalInfo): boolean {
+    return virusTotal.checked && virusTotal.status != "UNAVAILABLE";
+}
+
+function isVirusTotalCacheScaduta(timestamp: Date): boolean {
+    return Date.now() - timestamp.getTime() > virusTotalCacheMs;
+}
+
+function normalizzaVirusTotalInfo(value: unknown): VirusTotalInfo | null {
+    if (!value || typeof value != "object") {
+        return null;
+    }
+
+    const item = value as Partial<VirusTotalInfo>;
+    const status = normalizzaVirusTotalStatus(item.status);
+
+    if (!status) {
+        return null;
+    }
+
+    return {
+        checked: Boolean(item.checked),
+        malicious: normalizzaConteggio(item.malicious),
+        suspicious: normalizzaConteggio(item.suspicious),
+        clean: normalizzaConteggio(item.clean),
+        lastUpdate: normalizzaData(item.lastUpdate),
+        status,
+        label: typeof item.label == "string" ? item.label : status,
+        note: typeof item.note == "string" ? item.note : ""
+    };
+}
+
+function normalizzaVirusTotalStatus(value: unknown): VirusTotalStatus | null {
+    if (typeof value != "string") {
+        return null;
+    }
+
+    if (
+        value == "NOT_CONFIGURED" ||
+        value == "NOT_FOUND" ||
+        value == "CLEAN" ||
+        value == "SUSPICIOUS" ||
+        value == "MALICIOUS" ||
+        value == "UNAVAILABLE"
+    ) {
+        return value;
+    }
+
+    return null;
 }
 
 function creaVirusTotalInfo(
