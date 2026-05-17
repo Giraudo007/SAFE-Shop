@@ -7,6 +7,7 @@ import dns from "dns/promises";
 import net from "net";
 import whois from "whois-json";
 import axios from "axios";
+import { GoogleGenAI } from "@google/genai";
 
 type RiskLevel = "LOW" | "MEDIUM" | "HIGH";
 
@@ -50,6 +51,43 @@ type AnalysisStoredResult = UrlMetrics & {
     ipInfo: IpInfo;
     blacklist: boolean;
     virusTotal: VirusTotalInfo;
+};
+
+type GeminiExplainPayload = {
+    url: string;
+    hostname: string;
+    score: number;
+    riskLevel: RiskLevel;
+    results: {
+        dominio: number;
+        https: number;
+        recensioni: number;
+        reputazione: number;
+        eta: number;
+        blacklist: boolean;
+        ipStatus: string;
+        ipNote: string;
+        virusTotalStatus: string;
+        malicious: number;
+        suspicious: number;
+        clean: number;
+    };
+};
+
+type GeminiChatMessage = {
+    role: "user" | "model";
+    text: string;
+};
+
+type GeminiSource = {
+    title: string;
+    uri: string;
+    domain: string;
+};
+
+type GeminiChatPayload = GeminiExplainPayload & {
+    question: string;
+    history: GeminiChatMessage[];
 };
 
 type VirusTotalApiStats = {
@@ -103,6 +141,14 @@ const virusTotalTimeoutMs = parsePositiveInteger(process.env.VIRUSTOTAL_TIMEOUT_
 const virusTotalCacheDays = parsePositiveInteger(process.env.VIRUSTOTAL_CACHE_DAYS, 30);
 const virusTotalCacheSeconds = virusTotalCacheDays * 24 * 60 * 60;
 const virusTotalCacheMs = virusTotalCacheSeconds * 1000;
+const googleCloudProject = process.env.GOOGLE_CLOUD_PROJECT
+    || process.env.GCLOUD_PROJECT
+    || process.env.GCP_PROJECT
+    || process.env.PROJECT_ID
+    || "";
+const googleCloudLocation = process.env.GOOGLE_CLOUD_LOCATION || process.env.VERTEX_AI_LOCATION || "global";
+const geminiModelName = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+const geminiTimeoutMs = parsePositiveInteger(process.env.GEMINI_TIMEOUT_MS, 20000);
 
 let blacklist = new Set<string>();
 let db: Db | undefined;
@@ -110,6 +156,7 @@ let client: MongoClient | undefined;
 let server: ReturnType<typeof app.listen> | undefined;
 let databaseInitPromise: Promise<Db | undefined> | undefined;
 const virusTotalPendingRequests = new Map<string, Promise<VirusTotalInfo>>();
+let geminiClient: GoogleGenAI | undefined;
 
 class UserInputError extends Error {
     constructor(message: string) {
@@ -236,6 +283,67 @@ app.get("/api/history/:hostname", async (req, res) => {
     } catch (err) {
         console.error("Errore recupero cronologia:", err);
         res.status(500).json({ error: "Errore recupero cronologia" });
+    }
+});
+
+app.post("/api/gemini/spiega", async (req, res) => {
+    try {
+        const payload = normalizzaRichiestaSpiegazioneGemini(req.body);
+        const explanation = await generaSpiegazioneGemini(payload);
+
+        res.json({
+            explanation,
+            model: geminiModelName,
+            location: googleCloudLocation
+        });
+    } catch (err) {
+        console.error("Errore Gemini:", err);
+
+        if (err instanceof UserInputError) {
+            res.status(400).json({ error: err.message });
+            return;
+        }
+
+        const message = err instanceof Error ? err.message : "Gemini non disponibile";
+        const isConfigurationError = message.includes("GOOGLE_CLOUD_PROJECT")
+            || message.includes("credenziali")
+            || message.includes("autenticarsi")
+            || message.includes("Vertex AI API");
+
+        res.status(isConfigurationError ? 503 : 500).json({
+            error: message
+        });
+    }
+});
+
+app.post("/api/gemini/chat", async (req, res) => {
+    try {
+        const payload = normalizzaRichiestaChatGemini(req.body);
+        const result = await generaRispostaChatGemini(payload);
+
+        res.json({
+            answer: result.answer,
+            sources: result.sources,
+            model: geminiModelName,
+            location: googleCloudLocation
+        });
+    } catch (err) {
+        console.error("Errore chat Gemini:", err);
+
+        if (err instanceof UserInputError) {
+            res.status(400).json({ error: err.message });
+            return;
+        }
+
+        const message = err instanceof Error ? err.message : "Gemini non disponibile";
+        const isConfigurationError = message.includes("GOOGLE_CLOUD_PROJECT")
+            || message.includes("credenziali")
+            || message.includes("autenticarsi")
+            || message.includes("Vertex AI API");
+
+        res.status(isConfigurationError ? 503 : 500).json({
+            error: message
+        });
     }
 });
 
@@ -426,6 +534,313 @@ async function withMongoRetry<T>(operation: (database: Db) => Promise<T>): Promi
 
         return operation(database);
     }
+}
+
+async function generaSpiegazioneGemini(payload: GeminiExplainPayload): Promise<string> {
+    const client = getGeminiClient();
+    const prompt = creaPromptSpiegazioneGemini(payload);
+
+    try {
+        const result = await withTimeout(
+            client.models.generateContent({
+                model: geminiModelName,
+                contents: prompt,
+                config: {
+                    systemInstruction: "Sei l'assistente di SAFE-Shop. Spiega risultati di sicurezza web in italiano semplice, senza inventare dati e senza dare garanzie assolute.",
+                    maxOutputTokens: 420,
+                    temperature: 0.25
+                }
+            }),
+            geminiTimeoutMs
+        );
+        const text = estraiTestoGemini(result);
+
+        if (!text) {
+            throw new Error("Gemini non ha restituito testo. Riprova tra poco.");
+        }
+
+        return text;
+    } catch (err) {
+        throw new Error(creaMessaggioErroreGemini(err));
+    }
+}
+
+async function generaRispostaChatGemini(payload: GeminiChatPayload): Promise<{ answer: string; sources: GeminiSource[] }> {
+    const client = getGeminiClient();
+    const prompt = creaPromptChatGemini(payload);
+
+    try {
+        const result = await withTimeout(
+            client.models.generateContent({
+                model: geminiModelName,
+                contents: prompt,
+                config: {
+                    systemInstruction: "Sei SAFE-Shop AI. Aiuti l'utente a valutare siti e-commerce con prudenza, dati tecnici e fonti web pubbliche. Non inventare prove, non diffamare aziende o persone, e distingui sempre tra fatto verificato, segnale di rischio e ipotesi.",
+                    maxOutputTokens: 720,
+                    temperature: 0.35,
+                    tools: [{ googleSearch: {} }]
+                }
+            }),
+            geminiTimeoutMs
+        );
+        const answer = estraiTestoGemini(result);
+
+        if (!answer) {
+            throw new Error("Gemini non ha restituito testo. Riprova tra poco.");
+        }
+
+        return {
+            answer,
+            sources: estraiFontiGemini(result)
+        };
+    } catch (err) {
+        throw new Error(creaMessaggioErroreGemini(err));
+    }
+}
+
+function getGeminiClient(): GoogleGenAI {
+    if (!googleCloudProject) {
+        throw new Error("Configura GOOGLE_CLOUD_PROJECT nel file .env prima di usare Gemini.");
+    }
+
+    if (!geminiClient) {
+        geminiClient = new GoogleGenAI({
+            vertexai: true,
+            project: googleCloudProject,
+            location: googleCloudLocation,
+            apiVersion: "v1"
+        });
+    }
+
+    return geminiClient;
+}
+
+function normalizzaRichiestaSpiegazioneGemini(body: unknown): GeminiExplainPayload {
+    if (!isRecord(body)) {
+        throw new UserInputError("Dati analisi non validi.");
+    }
+
+    const results = isRecord(body.results) ? body.results : body;
+    const ipInfo = isRecord(results.ipInfo) ? results.ipInfo : {};
+    const virusTotal = isRecord(results.virusTotal) ? results.virusTotal : {};
+    const hostname = normalizzaHostname(leggiStringa(body.hostname) || leggiStringa(results.hostname));
+
+    if (!hostname) {
+        throw new UserInputError("Dati analisi non validi: hostname mancante.");
+    }
+
+    const score = limitaPunteggio(normalizzaNumero(body.score ?? results.score, 0));
+    const riskLevel = normalizzaRiskLevel(body.riskLevel)
+        || normalizzaRiskLevel(results.riskLevel)
+        || calcolaLivelloRischio(score);
+
+    return {
+        url: leggiStringa(body.url) || leggiStringa(results.url) || hostname,
+        hostname,
+        score,
+        riskLevel,
+        results: {
+            dominio: limitaPunteggio(normalizzaNumero(results.dominio, 0)),
+            https: limitaPunteggio(normalizzaNumero(results.https, 0)),
+            recensioni: limitaPunteggio(normalizzaNumero(results.recensioni, 0)),
+            reputazione: limitaPunteggio(normalizzaNumero(results.reputazione, 0)),
+            eta: limitaPunteggio(normalizzaNumero(results.eta, 0)),
+            blacklist: leggiBoolean(results.blacklist),
+            ipStatus: leggiStringa(ipInfo.label, leggiStringa(results.ip, "Non disponibile")),
+            ipNote: leggiStringa(ipInfo.note, "Stato infrastruttura non disponibile."),
+            virusTotalStatus: leggiStringa(virusTotal.label, leggiStringa(virusTotal.status, "Non disponibile")),
+            malicious: normalizzaConteggio(virusTotal.malicious),
+            suspicious: normalizzaConteggio(virusTotal.suspicious),
+            clean: normalizzaConteggio(virusTotal.clean)
+        }
+    };
+}
+
+function normalizzaRichiestaChatGemini(body: unknown): GeminiChatPayload {
+    const base = normalizzaRichiestaSpiegazioneGemini(body);
+
+    if (!isRecord(body)) {
+        throw new UserInputError("Dati chat non validi.");
+    }
+
+    const question = leggiStringa(body.question);
+
+    if (!question) {
+        throw new UserInputError("Scrivi una domanda sul sito analizzato.");
+    }
+
+    if (question.length > 600) {
+        throw new UserInputError("Domanda troppo lunga: usa massimo 600 caratteri.");
+    }
+
+    return {
+        ...base,
+        question,
+        history: normalizzaCronologiaChat(body.history)
+    };
+}
+
+function normalizzaCronologiaChat(value: unknown): GeminiChatMessage[] {
+    if (!Array.isArray(value)) {
+        return [];
+    }
+
+    return value
+        .slice(-8)
+        .map(item => {
+            if (!isRecord(item)) {
+                return null;
+            }
+
+            const role = item.role == "user" ? "user" : item.role == "model" ? "model" : null;
+            const text = leggiStringa(item.text);
+
+            if (!role || !text) {
+                return null;
+            }
+
+            return {
+                role,
+                text: text.slice(0, 900)
+            };
+        })
+        .filter((item): item is GeminiChatMessage => Boolean(item));
+}
+
+function creaPromptSpiegazioneGemini(payload: GeminiExplainPayload): string {
+    return [
+        "Spiega questo risultato SAFE-Shop a uno studente o utente non tecnico.",
+        "Regole:",
+        "- Rispondi in italiano.",
+        "- Usa massimo 8 frasi brevi.",
+        "- Evidenzia perche il sito sembra affidabile, medio o rischioso.",
+        "- Cita i segnali principali: HTTPS, dominio, eta, blacklist, IP e VirusTotal.",
+        "- Non dire mai che un sito e sicuro al 100%.",
+        "- Chiudi con 2 consigli pratici.",
+        "",
+        "Dati dell'analisi:",
+        JSON.stringify(payload, null, 2)
+    ].join("\n");
+}
+
+function creaPromptChatGemini(payload: GeminiChatPayload): string {
+    return [
+        "Rispondi alla domanda dell'utente sul sito analizzato.",
+        "",
+        "Obiettivo:",
+        "- Valutare se il sito, i prodotti o il venditore mostrano segnali di affidabilita o rischio.",
+        "- Usare i dati tecnici SAFE-Shop e, quando serve, informazioni pubbliche aggiornate dal web tramite Google Search.",
+        "- Cercare segnali come recensioni ricorrenti, reclami, mancati rimborsi, prodotti contraffatti, societa proprietaria, contatti aziendali, pagine legali, notizie e possibili truffe.",
+        "",
+        "Regole di risposta:",
+        "- Rispondi in italiano.",
+        "- Se la domanda chiede una decisione, inizia con 'Risposta breve: si', 'Risposta breve: no' oppure 'Risposta breve: non abbastanza dati'.",
+        "- Distingui tra dati certi e segnali non conclusivi.",
+        "- Non accusare persone o aziende di truffa senza fonti solide; usa formule come 'segnale di rischio', 'da verificare', 'non confermato'.",
+        "- Non garantire mai che un acquisto sia sicuro al 100%.",
+        "- Chiudi con un consiglio pratico per l'utente.",
+        "",
+        "Dati SAFE-Shop:",
+        JSON.stringify({
+            url: payload.url,
+            hostname: payload.hostname,
+            score: payload.score,
+            riskLevel: payload.riskLevel,
+            results: payload.results
+        }, null, 2),
+        "",
+        "Cronologia recente:",
+        JSON.stringify(payload.history, null, 2),
+        "",
+        "Domanda utente:",
+        payload.question
+    ].join("\n");
+}
+
+function estraiTestoGemini(response: {
+    text?: string | undefined;
+    candidates?: Array<{ content?: { parts?: Array<{ text?: unknown }> } | undefined }> | undefined;
+}): string {
+    if (typeof response.text == "string" && response.text.trim()) {
+        return response.text.trim();
+    }
+
+    return (response.candidates || [])
+        .flatMap(candidate => candidate.content?.parts || [])
+        .map(part => typeof part.text == "string" ? part.text.trim() : "")
+        .filter(Boolean)
+        .join("\n")
+        .trim();
+}
+
+function estraiFontiGemini(response: {
+    candidates?: Array<{
+        groundingMetadata?: {
+            groundingChunks?: Array<{
+                web?: {
+                    title?: string;
+                    uri?: string;
+                    domain?: string;
+                };
+            }>;
+        };
+    }> | undefined;
+}): GeminiSource[] {
+    const sources = new Map<string, GeminiSource>();
+
+    for (const candidate of response.candidates || []) {
+        for (const chunk of candidate.groundingMetadata?.groundingChunks || []) {
+            const web = chunk.web;
+            const uri = leggiStringa(web?.uri);
+
+            if (!uri || sources.has(uri)) {
+                continue;
+            }
+
+            sources.set(uri, {
+                uri,
+                title: leggiStringa(web?.title, "Fonte web"),
+                domain: leggiStringa(web?.domain)
+            });
+        }
+    }
+
+    return Array.from(sources.values()).slice(0, 5);
+}
+
+function creaMessaggioErroreGemini(err: unknown): string {
+    const details = descriviErroreEsterno(err);
+    const lower = details.toLowerCase();
+
+    if (lower.includes("default credentials")
+        || lower.includes("could not load")
+        || lower.includes("adc")
+        || lower.includes("unable to authenticate")
+        || lower.includes("authentication")) {
+        return "Gemini non puo autenticarsi: esegui gcloud auth application-default login e riavvia il server.";
+    }
+
+    if (lower.includes("permission") || lower.includes("denied") || lower.includes("403")) {
+        return "Google Cloud ha rifiutato la richiesta: verifica che Vertex AI API sia attiva e che il tuo account abbia accesso al progetto.";
+    }
+
+    if (lower.includes("not found") && lower.includes("model")) {
+        return "Modello Gemini non trovato in Vertex AI: controlla GEMINI_MODEL e GOOGLE_CLOUD_LOCATION nel file .env.";
+    }
+
+    return "Gemini non disponibile: " + details;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value == "object" && value !== null && !Array.isArray(value);
+}
+
+function leggiStringa(value: unknown, fallback = ""): string {
+    return typeof value == "string" && value.trim() ? value.trim() : fallback;
+}
+
+function leggiBoolean(value: unknown): boolean {
+    return value === true || value === 1 || value === "1" || value === "true";
 }
 
 async function caricaBlacklist() {

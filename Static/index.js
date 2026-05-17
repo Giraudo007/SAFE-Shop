@@ -1,6 +1,9 @@
 "use strict";
 
 let isLoading = false;
+let isGeminiLoading = false;
+let lastAnalysisData = null;
+let geminiHistory = [];
 
 const virusTotalCardClasses = ["is-success", "is-warning", "is-danger", "vt-clean", "vt-warning", "vt-danger", "vt-muted"];
 
@@ -58,8 +61,19 @@ const popularSites = [
 window.onload = function () {
     const btn = document.getElementById("btnAnalizza");
     const input = document.getElementById("txtUrl");
+    const geminiForm = document.getElementById("geminiForm");
+    const quickPrompts = document.querySelectorAll(".ai-chip");
 
     btn.addEventListener("click", analizza);
+    geminiForm.addEventListener("submit", function (event) {
+        event.preventDefault();
+        inviaDomandaGemini();
+    });
+    quickPrompts.forEach(function (button) {
+        button.addEventListener("click", function () {
+            inviaDomandaGemini(button.dataset.question || button.innerText);
+        });
+    });
     input.addEventListener("keydown", function (event) {
         if (event.key === "Enter") {
             analizza();
@@ -92,10 +106,17 @@ async function analizza(urlSuggerito) {
     try {
         const dati = await inviaRichiesta("POST", "/analizza", { url });
         const punteggio = Number.isFinite(dati.score) ? dati.score : calcolaPunteggio(dati);
+        lastAnalysisData = {
+            ...dati,
+            url,
+            score: punteggio,
+            riskLevel: getRiskLevelCode(punteggio)
+        };
 
         aggiornaRisultato(punteggio);
         aggiornaDettagli(dati);
         aggiornaStats(dati.stats);
+        resetChatAi(true);
         mostraFeedback("Analisi completata.", "success");
     } catch (err) {
         const message = err instanceof Error ? err.message : "Errore durante l'analisi.";
@@ -114,6 +135,7 @@ function resetAnalisi() {
     const virusTotalCard = document.getElementById("virusTotalCard");
     const riskLevel = document.getElementById("riskLevel");
 
+    lastAnalysisData = null;
     lblPercentuale.innerText = "--%";
     lblPercentuale.style.color = "var(--text)";
     lblLivello.innerText = "In attesa di analisi";
@@ -146,6 +168,7 @@ function resetAnalisi() {
     setText("lastCheck", "-");
     riskLevel.innerText = "-";
     riskLevel.style.color = "var(--text)";
+    resetChatAi(false);
 }
 
 function calcolaPunteggio(dati) {
@@ -316,6 +339,145 @@ function aggiornaStats(stats) {
     riskLevel.style.color = risk.color;
 }
 
+async function inviaDomandaGemini(domandaRapida) {
+    if (isGeminiLoading || !lastAnalysisData) {
+        return;
+    }
+
+    const input = document.getElementById("geminiQuestion");
+    const question = typeof domandaRapida === "string" ? domandaRapida.trim() : input.value.trim();
+
+    if (!question) {
+        input.focus();
+        return;
+    }
+
+    input.value = "";
+    aggiungiMessaggioChat("user", question);
+    const pendingMessage = aggiungiMessaggioChat("assistant", "Sto controllando analisi tecnica e informazioni pubbliche...");
+    setGeminiLoading(true);
+    setText("geminiMeta", "");
+
+    try {
+        const response = await inviaRichiesta("POST", "/gemini/chat", {
+            url: lastAnalysisData.url,
+            hostname: lastAnalysisData.hostname,
+            score: lastAnalysisData.score,
+            riskLevel: lastAnalysisData.riskLevel,
+            results: lastAnalysisData,
+            question,
+            history: geminiHistory.slice(-8)
+        });
+        const answer = response.answer || "Gemini non ha restituito una risposta.";
+
+        aggiornaMessaggioChat(pendingMessage, answer, response.sources || []);
+        salvaTurnoChat("user", question);
+        salvaTurnoChat("model", answer);
+        setText("geminiMeta", response.model ? "Modello: " + response.model + " - Area: " + response.location : "");
+    } catch (err) {
+        const message = err instanceof Error ? err.message : "Gemini non disponibile.";
+        aggiornaMessaggioChat(pendingMessage, message, []);
+        setText("geminiMeta", "Controlla login ADC, progetto Google Cloud e Vertex AI API.");
+    } finally {
+        setGeminiLoading(false);
+    }
+}
+
+function resetChatAi(enabled) {
+    geminiHistory = [];
+    setText("geminiMeta", "");
+    svuotaChatAi(enabled
+        ? "Analisi completata. Puoi chiedermi se i prodotti sembrano attendibili, se ci sono reclami pubblici o chi c'e dietro al sito."
+        : "Esegui un'analisi e poi chiedimi informazioni sul sito.");
+    abilitaChatAi(Boolean(enabled));
+}
+
+function svuotaChatAi(message) {
+    const chat = document.getElementById("geminiChat");
+
+    chat.innerHTML = "";
+    aggiungiMessaggioChat("assistant", message);
+}
+
+function aggiungiMessaggioChat(role, text, sources) {
+    const chat = document.getElementById("geminiChat");
+    const message = document.createElement("div");
+    const paragraph = document.createElement("p");
+
+    message.className = role === "user" ? "ai-message ai-message-user" : "ai-message ai-message-assistant";
+    paragraph.innerText = text;
+    message.appendChild(paragraph);
+    aggiungiFontiMessaggio(message, sources || []);
+    chat.appendChild(message);
+    chat.scrollTop = chat.scrollHeight;
+
+    return message;
+}
+
+function aggiornaMessaggioChat(message, text, sources) {
+    const paragraph = message.querySelector("p");
+
+    paragraph.innerText = text;
+    message.querySelectorAll(".ai-sources").forEach(function (sourceBlock) {
+        sourceBlock.remove();
+    });
+    aggiungiFontiMessaggio(message, sources || []);
+
+    const chat = document.getElementById("geminiChat");
+    chat.scrollTop = chat.scrollHeight;
+}
+
+function aggiungiFontiMessaggio(message, sources) {
+    if (!Array.isArray(sources) || sources.length === 0) {
+        return;
+    }
+
+    const list = document.createElement("div");
+    list.className = "ai-sources";
+
+    sources.slice(0, 5).forEach(function (source) {
+        const link = document.createElement("a");
+        link.href = source.uri;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        link.innerText = source.domain || source.title || "Fonte";
+        list.appendChild(link);
+    });
+
+    message.appendChild(list);
+}
+
+function salvaTurnoChat(role, text) {
+    geminiHistory.push({ role, text });
+
+    if (geminiHistory.length > 10) {
+        geminiHistory = geminiHistory.slice(-10);
+    }
+}
+
+function abilitaChatAi(value) {
+    const input = document.getElementById("geminiQuestion");
+    const btn = document.getElementById("btnInviaAi");
+    const quickPrompts = document.querySelectorAll(".ai-chip");
+    const disabled = !value || isLoading || isGeminiLoading;
+
+    input.disabled = disabled;
+    btn.disabled = disabled;
+    quickPrompts.forEach(function (button) {
+        button.disabled = disabled;
+    });
+}
+
+function setGeminiLoading(value) {
+    isGeminiLoading = value;
+
+    const btn = document.getElementById("btnInviaAi");
+
+    btn.disabled = value || !lastAnalysisData;
+    btn.innerText = value ? "Cerco..." : "Invia";
+    abilitaChatAi(Boolean(lastAnalysisData) && !value);
+}
+
 function renderSitiPopolari() {
     const container = document.getElementById("popularSites");
 
@@ -372,6 +534,7 @@ function setLoading(value) {
     btn.disabled = value;
     input.disabled = value;
     btn.innerText = value ? "Analisi..." : "Analizza";
+    abilitaChatAi(Boolean(lastAnalysisData) && !value);
 }
 
 function mostraFeedback(message, type) {
@@ -414,6 +577,12 @@ function getRiskInfoFromLevel(level) {
     if (level === "MEDIUM") return getRiskInfo(40);
     if (level === "HIGH") return getRiskInfo(0);
     return { color: "var(--text)", className: "" };
+}
+
+function getRiskLevelCode(score) {
+    if (score >= 70) return "LOW";
+    if (score >= 40) return "MEDIUM";
+    return "HIGH";
 }
 
 function limitaPunteggio(value) {

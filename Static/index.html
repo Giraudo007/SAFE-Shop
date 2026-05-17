@@ -174,6 +174,47 @@
       </div>
     </section>
 
+    <p class="section-label">Chat AI</p>
+
+    <section class="ai-card" aria-label="Chat AI sul sito analizzato">
+      <div class="ai-card-head">
+        <div>
+          <strong>SAFE-Shop AI</strong>
+          <span>Gemini con ricerca web</span>
+        </div>
+      </div>
+
+      <div class="ai-quick-prompts" aria-label="Domande rapide">
+        <button class="ai-chip" type="button" data-question="I prodotti di questo sito sono attendibili? Rispondi si o no e spiegami il perche.">
+          Prodotti attendibili?
+        </button>
+        <button class="ai-chip" type="button" data-question="Ci sono segnali pubblici di truffe, reclami o problemi con questo sito?">
+          Truffe o reclami?
+        </button>
+        <button class="ai-chip" type="button" data-question="Chi sembra essere il proprietario o l'azienda dietro questo sito? E cosa devo verificare?">
+          Proprietario sito
+        </button>
+        <button class="ai-chip" type="button" data-question="Conviene comprare da questo sito? Dammi una risposta breve e poi i motivi.">
+          Conviene comprare?
+        </button>
+      </div>
+
+      <div id="geminiChat" class="ai-chat-log" aria-live="polite">
+        <div class="ai-message ai-message-assistant">
+          <p>Esegui un'analisi e poi chiedimi informazioni sul sito.</p>
+        </div>
+      </div>
+
+      <form id="geminiForm" class="ai-chat-form">
+        <input id="geminiQuestion" type="text" placeholder="Fai una domanda sul sito analizzato" disabled>
+        <button id="btnInviaAi" class="ai-action" type="submit" disabled>
+          Invia
+        </button>
+      </form>
+
+      <p id="geminiMeta" class="ai-meta"></p>
+    </section>
+
     <p class="section-label">Siti popolari</p>
 
     <section class="popular-sites-card" aria-label="Siti popolari da analizzare">

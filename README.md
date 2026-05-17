@@ -19,6 +19,9 @@ L'app analizza indicatori tecnici, reputazionali e di sicurezza, calcola uno sco
 - Controllo reputazione VirusTotal per domini e IP.
 - Cache MongoDB dei risultati VirusTotal per evitare chiamate API ripetute.
 - Storico analisi e statistiche aggregate per hostname.
+- Chat AI contestuale con Gemini su Vertex AI, usando credenziali ADC e non API key.
+- Domande rapide su attendibilita dei prodotti, reclami pubblici, proprietario del sito e convenienza dell'acquisto.
+- Grounding con Google Search per integrare informazioni web pubbliche e aggiornate quando Vertex AI e configurato.
 - Interfaccia web responsive con score, dettagli tecnici, statistiche e siti popolari.
 
 ## Stack Tecnologico
@@ -28,6 +31,7 @@ L'app analizza indicatori tecnici, reputazionali e di sicurezza, calcola uno sco
 - Express
 - MongoDB
 - Axios
+- @google/genai
 - dotenv
 - whois-json
 - HTML, CSS e JavaScript vanilla
@@ -51,10 +55,11 @@ SAFE-Shop/
 
 ## Requisiti
 
-- Node.js 18 o superiore
+- Node.js 20 o superiore
 - npm
 - MongoDB locale o remoto, opzionale ma consigliato
 - API key VirusTotal, opzionale ma consigliata
+- Google Cloud CLI, opzionale: serve solo per usare la spiegazione AI con Gemini/Vertex AI
 
 Senza MongoDB l'app puo comunque rispondere alle analisi, ma non salva storico, statistiche e cache VirusTotal.
 
@@ -80,7 +85,22 @@ PORT=3000
 
 # VirusTotal
 VIRUSTOTAL_API_KEY="inserisci_la_tua_api_key"
+
+# Gemini Vertex AI con ADC, senza API key
+GOOGLE_CLOUD_PROJECT="lyrical-edition-496616-s8"
+GOOGLE_CLOUD_LOCATION="global"
+GOOGLE_GENAI_USE_VERTEXAI="true"
+GEMINI_MODEL="gemini-2.5-flash"
+GEMINI_TIMEOUT_MS=20000
 ```
+
+Per usare Gemini non serve Python e non serve una chiave API. Installa Google Cloud CLI, poi fai login ADC:
+
+```bash
+gcloud auth application-default login
+```
+
+Verifica anche che nel progetto Google Cloud sia attiva la Vertex AI API.
 
 Avvia il server:
 
@@ -122,6 +142,11 @@ Esegue il controllo TypeScript con `tsc --noEmit`.
 | `VIRUSTOTAL_API_KEY` | vuota | API key VirusTotal. |
 | `VIRUSTOTAL_TIMEOUT_MS` | `8000` | Timeout richiesta VirusTotal in millisecondi. |
 | `VIRUSTOTAL_CACHE_DAYS` | `30` | Giorni di validita della cache VirusTotal. |
+| `GOOGLE_CLOUD_PROJECT` | vuota | ID progetto Google Cloud usato da Vertex AI. |
+| `GOOGLE_CLOUD_LOCATION` | `global` | Location Vertex AI usata da Gemini. |
+| `GOOGLE_GENAI_USE_VERTEXAI` | `true` | Indica allo SDK Google Gen AI di usare Vertex AI. |
+| `GEMINI_MODEL` | `gemini-2.5-flash` | Modello Gemini usato dalla chat AI. |
+| `GEMINI_TIMEOUT_MS` | `20000` | Timeout richiesta Gemini in millisecondi. |
 
 Nota: dopo ogni modifica al file `.env` bisogna riavviare il server, perche Node legge le variabili d'ambiente all'avvio.
 
@@ -139,6 +164,8 @@ Quando l'utente inserisce un URL, dominio o IP:
 8. Calcola lo score finale.
 9. Salva analisi e statistiche su MongoDB.
 10. Restituisce il report al frontend.
+11. Se richiesto dall'utente, invia i dati del report e la domanda della chat a Gemini su Vertex AI.
+12. Gemini puo usare Google Search grounding per cercare informazioni pubbliche aggiornate sul sito, come recensioni, reclami, azienda proprietaria e segnali di rischio.
 
 ## Algoritmo Di Punteggio
 
