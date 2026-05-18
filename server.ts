@@ -1507,7 +1507,7 @@ function isIpv4InCidr(ip: string, cidr: string): boolean {
         return false;
     }
 
-    const mask = prefix === 0 ? 0 : (0xffffffff << (32 - prefix)) >>> 0;
+    const mask = prefix == 0 ? 0 : (0xffffffff << (32 - prefix)) >>> 0;
     return (ipNumber & mask) === (rangeNumber & mask);
 }
 
