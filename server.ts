@@ -1922,7 +1922,7 @@ app.use(function (
     res: express.Response,
     next: express.NextFunction
 ) {
-    if (err.type === "entity.parse.failed" || err.status === 400) {
+    if (err.type == "entity.parse.failed" || err.status === 400) {
         res.status(400).json({ error: "JSON non valido" });
         return;
     }
