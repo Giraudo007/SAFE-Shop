@@ -840,7 +840,7 @@ function leggiStringa(value: unknown, fallback = ""): string {
 }
 
 function leggiBoolean(value: unknown): boolean {
-    return value == true || value == 1 || value === "1" || value === "true";
+    return value == true || value == 1 || value == "1" || value === "true";
 }
 
 async function caricaBlacklist() {
