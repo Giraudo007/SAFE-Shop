@@ -1448,7 +1448,7 @@ function isIpv6Pubblico(ip: string): boolean {
         return isIpv4Pubblico(ipv4MappedMatch[1]);
     }
 
-    if (normalizedIp === "::" || normalizedIp === "::1") {
+    if (normalizedIp == "::" || normalizedIp === "::1") {
         return false;
     }
 
