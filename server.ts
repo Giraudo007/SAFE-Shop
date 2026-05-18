@@ -1503,7 +1503,7 @@ function isIpv4InCidr(ip: string, cidr: string): boolean {
     const ipNumber = ipv4ToNumber(ip);
     const rangeNumber = ipv4ToNumber(rangeIp || "");
 
-    if (ipNumber === null || rangeNumber == null || !Number.isFinite(prefix)) {
+    if (ipNumber == null || rangeNumber == null || !Number.isFinite(prefix)) {
         return false;
     }
 
