@@ -1460,7 +1460,7 @@ function isIpv6Pubblico(ip: string): boolean {
         return false;
     }
 
-    if (Number.isFinite(firstByte) && (firstByte & 0xfe) === 0xfc) {
+    if (Number.isFinite(firstByte) && (firstByte & 0xfe) == 0xfc) {
         return false;
     }
 
