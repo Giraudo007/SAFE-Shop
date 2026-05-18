@@ -1456,7 +1456,7 @@ function isIpv6Pubblico(ip: string): boolean {
         return false;
     }
 
-    if (normalizedIp.startsWith("2001:db8:") || normalizedIp === "2001:db8::") {
+    if (normalizedIp.startsWith("2001:db8:") || normalizedIp == "2001:db8::") {
         return false;
     }
 
