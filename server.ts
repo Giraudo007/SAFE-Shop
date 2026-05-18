@@ -1464,7 +1464,7 @@ function isIpv6Pubblico(ip: string): boolean {
         return false;
     }
 
-    if (Number.isFinite(firstByte) && firstByte === 0xff) {
+    if (Number.isFinite(firstByte) && firstByte == 0xff) {
         return false;
     }
 
