@@ -387,7 +387,7 @@ async function creaConnessioneDatabase(): Promise<Db | undefined> {
         console.log("📍 Indice creato su url_checks:", indexesUrl);
 
         await configuraPuliziaStorico(database);
-        
+
         const indexesStats = await database.collection("url_stats").createIndex({ hostname: 1 });
         console.log("📍 Indice creato su url_stats:", indexesStats);
 
@@ -547,7 +547,7 @@ async function generaSpiegazioneGemini(payload: GeminiExplainPayload): Promise<s
                 contents: prompt,
                 config: {
                     systemInstruction: "Sei l'assistente di SAFE-Shop. Spiega risultati di sicurezza web in italiano semplice, senza inventare dati e senza dare garanzie assolute.",
-                    maxOutputTokens: 420,
+                    maxOutputTokens: 600,   // FIX: aumentato da 420 per evitare troncamenti
                     temperature: 0.25
                 }
             }),
@@ -570,23 +570,48 @@ async function generaRispostaChatGemini(payload: GeminiChatPayload): Promise<{ a
     const prompt = creaPromptChatGemini(payload);
 
     try {
+        // Su Vertex AI (apiVersion v1) il tool supportato per il grounding con Google Search
+        // è googleSearch (NON googleSearchRetrieval che viene rifiutato con INVALID_ARGUMENT).
+        // Il testo viene estratto da estraiTestoGemini con fallback manuale sui candidates.
         const result = await withTimeout(
             client.models.generateContent({
                 model: geminiModelName,
                 contents: prompt,
                 config: {
                     systemInstruction: "Sei SAFE-Shop AI. Aiuti l'utente a valutare siti e-commerce con prudenza, dati tecnici e fonti web pubbliche. Non inventare prove, non diffamare aziende o persone, e distingui sempre tra fatto verificato, segnale di rischio e ipotesi.",
-                    maxOutputTokens: 720,
+                    maxOutputTokens: 1500,
                     temperature: 0.35,
-                    tools: [{ googleSearch: {} }]
+                    tools: [{ googleSearch: {} } as never]
                 }
             }),
             geminiTimeoutMs
         );
+
         const answer = estraiTestoGemini(result);
 
         if (!answer) {
-            throw new Error("Gemini non ha restituito testo. Riprova tra poco.");
+            // Fallback: se googleSearch non restituisce testo (es. risposta solo con parti grounding),
+            // riprova senza ricerca web (risposta sempre disponibile).
+            console.warn("⚠️  Chat: risposta vuota con googleSearch, riprovo senza ricerca web.");
+            const fallback = await withTimeout(
+                client.models.generateContent({
+                    model: geminiModelName,
+                    contents: prompt,
+                    config: {
+                        systemInstruction: "Sei SAFE-Shop AI. Aiuti l'utente a valutare siti e-commerce con prudenza, dati tecnici. Non inventare prove e distingui tra fatto verificato, segnale di rischio e ipotesi.",
+                        maxOutputTokens: 1500,
+                        temperature: 0.35
+                    }
+                }),
+                geminiTimeoutMs
+            );
+            const fallbackAnswer = estraiTestoGemini(fallback);
+
+            if (!fallbackAnswer) {
+                throw new Error("Il modello non ha generato testo. Verifica che il modello Gemini sia disponibile nella region Vertex AI configurata.");
+            }
+
+            return { answer: fallbackAnswer, sources: [] };
         }
 
         return {
@@ -757,20 +782,48 @@ function creaPromptChatGemini(payload: GeminiChatPayload): string {
     ].join("\n");
 }
 
-function estraiTestoGemini(response: {
-    text?: string | undefined;
-    candidates?: Array<{ content?: { parts?: Array<{ text?: unknown }> } | undefined }> | undefined;
-}): string {
-    if (typeof response.text == "string" && response.text.trim()) {
-        return response.text.trim();
+function estraiTestoGemini(response: unknown): string {
+    const resp = response as Record<string, unknown>;
+
+    // Tentativo 1: getter .text del SDK — può lanciare quando la risposta
+    // contiene parti non-testuali (es. functionCall da Google Search su Vertex AI)
+    try {
+        const sdkText = resp.text;
+        if (typeof sdkText == "string" && sdkText.trim()) {
+            return sdkText.trim();
+        }
+    } catch {
+        // getter ha lanciato: ignoriamo e proviamo con candidates
     }
 
-    return (response.candidates || [])
-        .flatMap(candidate => candidate.content?.parts || [])
-        .map(part => typeof part.text == "string" ? part.text.trim() : "")
-        .filter(Boolean)
-        .join("\n")
-        .trim();
+    // Tentativo 2: scorrere candidates → content → parts raccogliendo tutti i testi
+    const candidates = Array.isArray(resp.candidates) ? resp.candidates : [];
+    const texts: string[] = [];
+
+    for (const candidate of candidates) {
+        const c = candidate as Record<string, unknown>;
+        const content = c.content as Record<string, unknown> | undefined;
+        const parts = Array.isArray(content?.parts) ? content!.parts : [];
+
+        for (const part of parts) {
+            const p = part as Record<string, unknown>;
+            if (typeof p.text == "string" && p.text.trim()) {
+                texts.push(p.text.trim());
+            }
+        }
+    }
+
+    if (texts.length > 0) {
+        return texts.join("\n").trim();
+    }
+
+    // Debug: mostra la struttura raw per capire cosa ha restituito Vertex AI
+    console.warn(
+        "⚠️  Gemini: struttura risposta inattesa (primi 1200 char):\n",
+        JSON.stringify(response, null, 2).slice(0, 1200)
+    );
+
+    return "";
 }
 
 function estraiFontiGemini(response: {
@@ -906,6 +959,15 @@ function normalizzaHostname(hostname: string | undefined): string {
         .replace(/^www\./, "");
 }
 
+// ─── FIX 1: DNS resolution ────────────────────────────────────────────────────
+// Restituisce il hostname da usare per la risoluzione DNS:
+// conserva il "www." originale perché molti siti (es. www.vallauri.edu)
+// hanno record A solo sul sottodominio www, non sul dominio nudo.
+function hostnameDns(rawHostname: string): string {
+    return rawHostname.trim().toLowerCase().replace(/\.$/, "");
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 function normalizzaVoceBlacklist(value: unknown): string | null {
     let raw: string | undefined;
 
@@ -959,7 +1021,9 @@ function isInBlacklist(hostname: string): boolean {
 }
 
 async function analizzaInfrastrutturaIp(hostname: string): Promise<IpInfo> {
-    const normalizedHost = normalizzaHostname(hostname);
+    const normalizedHost = normalizzaHostname(hostname);  // senza www  → per storage/logica
+    const dnsHost = hostnameDns(hostname);                 // con www    → per risoluzione DNS
+
     const ipVersion = net.isIP(normalizedHost);
 
     if (ipVersion != 0) {
@@ -980,10 +1044,13 @@ async function analizzaInfrastrutturaIp(hostname: string): Promise<IpInfo> {
         };
     }
 
+    // FIX 1: usa dnsHost (conserva www) per la risoluzione DNS.
+    // Se il dominio nudo non ha record A (es. vallauri.edu) ma www.vallauri.edu sì,
+    // la risoluzione va a buon fine invece di restituire un array vuoto.
     const [ipv4, ipv6, cname] = await Promise.all([
-        risolviRecordDns(() => dns.resolve4(normalizedHost)),
-        risolviRecordDns(() => dns.resolve6(normalizedHost)),
-        risolviRecordDns(() => dns.resolveCname(normalizedHost))
+        risolviRecordDns(() => dns.resolve4(dnsHost)),
+        risolviRecordDns(() => dns.resolve6(dnsHost)),
+        risolviRecordDns(() => dns.resolveCname(dnsHost))
     ]);
 
     const allIps = [...ipv4, ...ipv6];
@@ -1538,9 +1605,8 @@ async function salvaAnalisi(
         }
 
         console.log("💾 Inizio salvataggio per hostname:", hostname);
-
         console.log("✍️ Inserting in url_checks - hostname:", hostname, "score:", score);
-        
+
         const insertResult = await withMongoRetry(database => database.collection("url_checks").insertOne({
             url,
             hostname,
@@ -1554,9 +1620,8 @@ async function salvaAnalisi(
             console.warn("Database non disponibile - ritorno stats default");
             return creaStatsDefault(score, timestamp);
         }
-        
-        console.log("✅ Inserito in url_checks con ID:", insertResult.insertedId);
 
+        console.log("✅ Inserito in url_checks con ID:", insertResult.insertedId);
         console.log("🔄 Aggiornamento atomico url_stats");
 
         const stats = await aggiornaStatsUrl(url, hostname, score, timestamp);
