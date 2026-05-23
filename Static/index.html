@@ -24,8 +24,8 @@
     <h1>Verifica l'affidabilita di un sito internet</h1>
 
     <p>
-      Inserisci dominio, URL o IP pubblico del negozio online che vuoi analizzare.
-      SAFE-Shop controlla indicatori tecnici, blacklist, dominio e reputazione.
+      Inserisci dominio, URL o IP pubblico del sito che vuoi analizzare.
+      SAFE-Shop controlla identita, contenuti, indicatori tecnici, blacklist e dominio.
     </p>
 
     <div class="search-bar">
@@ -79,33 +79,33 @@
 
     <section class="details-grid">
       <div class="detail-card">
-        <p class="detail-label">Eta Dominio</p>
+        <p class="detail-label">Stabilita dominio</p>
         <strong id="eta" class="detail-value">--</strong>
-        <p class="detail-desc">Anzianita del dominio</p>
+        <p class="detail-desc">Eta pubblica del dominio</p>
       </div>
 
       <div class="detail-card">
         <p class="detail-label">Dominio</p>
         <strong id="dominio" class="detail-value">--</strong>
-        <p class="detail-desc">Analisi del dominio</p>
+        <p class="detail-desc">Struttura del nome dominio</p>
       </div>
 
       <div class="detail-card">
         <p class="detail-label">HTTPS</p>
         <strong id="https" class="detail-value">--</strong>
-        <p class="detail-desc">Connessione sicura</p>
+        <p id="httpsNote" class="detail-desc">Stato del protocollo</p>
       </div>
 
       <div class="detail-card">
-        <p class="detail-label">Recensioni</p>
+        <p class="detail-label">Identita sito</p>
         <strong id="recensioni" class="detail-value">--</strong>
-        <p class="detail-desc">Popolarita apparente</p>
+        <p id="identityNote" class="detail-desc">Contatti e pagine informative</p>
       </div>
 
       <div class="detail-card">
-        <p class="detail-label">Reputazione</p>
+        <p class="detail-label">Rischio contenuti</p>
         <strong id="reputazione" class="detail-value">--</strong>
-        <p class="detail-desc">Indice di fiducia</p>
+        <p id="contentNote" class="detail-desc">Pattern testuali nella pagina</p>
       </div>
 
       <div id="ipCard" class="detail-card">
@@ -185,8 +185,8 @@
       </div>
 
       <div class="ai-quick-prompts" aria-label="Domande rapide">
-        <button class="ai-chip" type="button" data-question="I prodotti di questo sito sono attendibili? Rispondi si o no e spiegami il perche.">
-          Prodotti attendibili?
+        <button class="ai-chip" type="button" data-question="Questo sito sembra attendibile? Rispondi si o no e spiegami il perche.">
+          Sito attendibile?
         </button>
         <button class="ai-chip" type="button" data-question="Ci sono segnali pubblici di truffe, reclami o problemi con questo sito?">
           Truffe o reclami?
@@ -194,8 +194,8 @@
         <button class="ai-chip" type="button" data-question="Chi sembra essere il proprietario o l'azienda dietro questo sito? E cosa devo verificare?">
           Proprietario sito
         </button>
-        <button class="ai-chip" type="button" data-question="Conviene comprare da questo sito? Dammi una risposta breve e poi i motivi.">
-          Conviene comprare?
+        <button class="ai-chip" type="button" data-question="Conviene fidarsi di questo sito? Dammi una risposta breve e poi i motivi.">
+          Conviene fidarsi?
         </button>
       </div>
 

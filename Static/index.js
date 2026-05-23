@@ -144,8 +144,11 @@ function resetAnalisi() {
 
     setText("dominio", "--");
     setText("https", "--");
+    setText("httpsNote", "Stato del protocollo");
     setText("recensioni", "--");
     setText("reputazione", "--");
+    setText("identityNote", "Contatti e pagine informative");
+    setText("contentNote", "Pattern testuali nella pagina");
     setText("eta", "--");
     setText("ipStatus", "--");
     setText("ip", "IP non ancora verificato");
@@ -176,14 +179,18 @@ function calcolaPunteggio(dati) {
     const https = limitaPunteggio(dati.https);
     const recensioni = limitaPunteggio(dati.recensioni);
     const reputazione = limitaPunteggio(dati.reputazione);
+    const infrastruttura = limitaPunteggio(
+        Number.isFinite(dati.infrastruttura) ? dati.infrastruttura : calcolaPunteggioInfrastruttura(dati.ipInfo)
+    );
     const eta = limitaPunteggio(dati.eta);
 
     const punteggio =
-        dominio * 0.25 +
-        https * 0.15 +
         recensioni * 0.20 +
         reputazione * 0.20 +
-        eta * 0.20;
+        infrastruttura * 0.20 +
+        dominio * 0.15 +
+        eta * 0.15 +
+        https * 0.10;
 
     return Math.round(punteggio);
 }
@@ -205,8 +212,11 @@ function aggiornaRisultato(punteggio) {
 function aggiornaDettagli(dati) {
     setText("dominio", formatScore(dati.dominio));
     setText("https", dati.https === 100 ? "Sicuro" : "Non sicuro");
+    setText("httpsNote", dati.https === 100 ? "Connessione cifrata" : "Connessione non cifrata");
     setText("recensioni", formatScore(dati.recensioni));
     setText("reputazione", formatScore(dati.reputazione));
+    setText("identityNote", getSiteInfoNote(dati.siteInfo, "identity"));
+    setText("contentNote", getSiteInfoNote(dati.siteInfo, "content"));
     setText("eta", formatScore(dati.eta));
     aggiornaInfrastruttura(dati);
     setText("blacklist", dati.blacklist ? "Presente" : "Non presente");
@@ -325,6 +335,36 @@ function formatIpList(info) {
     return parts.length > 0 ? parts.join(" | ") : "Nessun IP trovato";
 }
 
+function calcolaPunteggioInfrastruttura(info) {
+    if (!info || !info.resolved) {
+        return 0;
+    }
+
+    if (info.usesCdn) {
+        return 90;
+    }
+
+    if (info.status === "OK") {
+        return 80;
+    }
+
+    return 40;
+}
+
+function getSiteInfoNote(info, type) {
+    if (!info) {
+        return type === "identity"
+            ? "Analisi pagina non ricevuta dal server"
+            : "Dati contenuto non ricevuti dal server";
+    }
+
+    if (type === "identity") {
+        return info.identityNote || "Contatti e pagine informative non evidenti.";
+    }
+
+    return info.contentNote || "Nessun pattern testuale fortemente sospetto.";
+}
+
 function aggiornaStats(stats) {
     if (!stats) return;
 
@@ -387,7 +427,7 @@ function resetChatAi(enabled) {
     geminiHistory = [];
     setText("geminiMeta", "");
     svuotaChatAi(enabled
-        ? "Analisi completata. Puoi chiedermi se i prodotti sembrano attendibili, se ci sono reclami pubblici o chi c'e dietro al sito."
+        ? "Analisi completata. Puoi chiedermi se il sito sembra attendibile, se ci sono reclami pubblici o chi c'e dietro."
         : "Esegui un'analisi e poi chiedimi informazioni sul sito.");
     abilitaChatAi(Boolean(enabled));
 }

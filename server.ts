@@ -16,6 +16,18 @@ type UrlMetrics = {
     https: number;
     recensioni: number;
     reputazione: number;
+    infrastruttura: number;
+};
+
+type SiteContentInfo = {
+    checked: boolean;
+    reachable: boolean;
+    identityLabel: string;
+    identityNote: string;
+    contentLabel: string;
+    contentNote: string;
+    signals: string[];
+    warnings: string[];
 };
 
 type IpStatus = "OK" | "WARNING";
@@ -49,6 +61,7 @@ type AnalysisStoredResult = UrlMetrics & {
     eta: number;
     ip: string;
     ipInfo: IpInfo;
+    siteInfo: SiteContentInfo;
     blacklist: boolean;
     virusTotal: VirusTotalInfo;
 };
@@ -63,7 +76,10 @@ type GeminiExplainPayload = {
         https: number;
         recensioni: number;
         reputazione: number;
+        infrastruttura: number;
         eta: number;
+        siteIdentityNote: string;
+        siteContentNote: string;
         blacklist: boolean;
         ipStatus: string;
         ipNote: string;
@@ -204,42 +220,65 @@ app.post("/api/analizza", async (req, res) => {
         const virusTotalPromise = controllaVirusTotal(hostname);
 
         if (blacklistTrovata) {
+            const siteInfo = creaSiteContentInfoDefault("Dominio in blacklist: analisi contenuto saltata.");
             metriche = {
                 dominio: 0,
                 https: 0,
                 recensioni: 0,
-                reputazione: 0
+                reputazione: 0,
+                infrastruttura: 0
             };
             eta = 0;
             virusTotal = await virusTotalPromise;
+            const results: AnalysisStoredResult = {
+                ...metriche,
+                eta,
+                ip: ipInfo.primary,
+                ipInfo,
+                siteInfo,
+                blacklist: blacklistTrovata,
+                virusTotal
+            };
+            const stats = await salvaAnalisi(url, hostname, 0, results);
+
+            res.json({
+                ...results,
+                score: 0,
+                hostname,
+                stats
+            });
+            return;
         } else {
-            const [etaDominio, virusTotalResult] = await Promise.all([
+            const [etaDominio, virusTotalResult, siteInfo] = await Promise.all([
                 calcolaEtaDominio(hostname),
-                virusTotalPromise
+                virusTotalPromise,
+                analizzaContenutoSito(url)
             ]);
 
             eta = etaDominio;
             virusTotal = virusTotalResult;
-            metriche = verificaUrl(url);
+            metriche = verificaUrl(url, ipInfo, siteInfo);
+
+            const score = calcolaPunteggio(metriche, eta, virusTotal);
+            const results: AnalysisStoredResult = {
+                ...metriche,
+                eta,
+                ip: ipInfo.primary,
+                ipInfo,
+                siteInfo,
+                blacklist: blacklistTrovata,
+                virusTotal
+            };
+            const stats = await salvaAnalisi(url, hostname, score, results);
+
+            res.json({
+                ...results,
+                score,
+                hostname,
+                stats
+            });
+            return;
         }
-
-        const score = blacklistTrovata ? 0 : calcolaPunteggio(metriche, eta, virusTotal);
-        const results: AnalysisStoredResult = {
-            ...metriche,
-            eta,
-            ip: ipInfo.primary,
-            ipInfo,
-            blacklist: blacklistTrovata,
-            virusTotal
-        };
-        const stats = await salvaAnalisi(url, hostname, score, results);
-
-        res.json({
-            ...results,
-            score,
-            hostname,
-            stats
-        });
     } catch (err) {
         console.error("Errore analisi:", err);
         res.status(400).json({
@@ -578,7 +617,7 @@ async function generaRispostaChatGemini(payload: GeminiChatPayload): Promise<{ a
                 model: geminiModelName,
                 contents: prompt,
                 config: {
-                    systemInstruction: "Sei SAFE-Shop AI. Aiuti l'utente a valutare siti e-commerce con prudenza, dati tecnici e fonti web pubbliche. Non inventare prove, non diffamare aziende o persone, e distingui sempre tra fatto verificato, segnale di rischio e ipotesi.",
+                    systemInstruction: "Sei SAFE-Shop AI. Aiuti l'utente a valutare siti web con prudenza, dati tecnici e fonti web pubbliche. Non inventare prove, non diffamare aziende o persone, e distingui sempre tra fatto verificato, segnale di rischio e ipotesi.",
                     maxOutputTokens: 1500,
                     temperature: 0.35,
                     tools: [{ googleSearch: {} } as never]
@@ -598,7 +637,7 @@ async function generaRispostaChatGemini(payload: GeminiChatPayload): Promise<{ a
                     model: geminiModelName,
                     contents: prompt,
                     config: {
-                        systemInstruction: "Sei SAFE-Shop AI. Aiuti l'utente a valutare siti e-commerce con prudenza, dati tecnici. Non inventare prove e distingui tra fatto verificato, segnale di rischio e ipotesi.",
+                        systemInstruction: "Sei SAFE-Shop AI. Aiuti l'utente a valutare siti web con prudenza e dati tecnici. Non inventare prove e distingui tra fatto verificato, segnale di rischio e ipotesi.",
                         maxOutputTokens: 1500,
                         temperature: 0.35
                     }
@@ -647,6 +686,7 @@ function normalizzaRichiestaSpiegazioneGemini(body: unknown): GeminiExplainPaylo
 
     const results = isRecord(body.results) ? body.results : body;
     const ipInfo = isRecord(results.ipInfo) ? results.ipInfo : {};
+    const siteInfo = isRecord(results.siteInfo) ? results.siteInfo : {};
     const virusTotal = isRecord(results.virusTotal) ? results.virusTotal : {};
     const hostname = normalizzaHostname(leggiStringa(body.hostname) || leggiStringa(results.hostname));
 
@@ -669,7 +709,10 @@ function normalizzaRichiestaSpiegazioneGemini(body: unknown): GeminiExplainPaylo
             https: limitaPunteggio(normalizzaNumero(results.https, 0)),
             recensioni: limitaPunteggio(normalizzaNumero(results.recensioni, 0)),
             reputazione: limitaPunteggio(normalizzaNumero(results.reputazione, 0)),
+            infrastruttura: limitaPunteggio(normalizzaNumero(results.infrastruttura, 0)),
             eta: limitaPunteggio(normalizzaNumero(results.eta, 0)),
+            siteIdentityNote: leggiStringa(siteInfo.identityNote, "Identita del sito non disponibile."),
+            siteContentNote: leggiStringa(siteInfo.contentNote, "Contenuto del sito non disponibile."),
             blacklist: leggiBoolean(results.blacklist),
             ipStatus: leggiStringa(ipInfo.label, leggiStringa(results.ip, "Non disponibile")),
             ipNote: leggiStringa(ipInfo.note, "Stato infrastruttura non disponibile."),
@@ -739,7 +782,7 @@ function creaPromptSpiegazioneGemini(payload: GeminiExplainPayload): string {
         "- Rispondi in italiano.",
         "- Usa massimo 8 frasi brevi.",
         "- Evidenzia perche il sito sembra affidabile, medio o rischioso.",
-        "- Cita i segnali principali: HTTPS, dominio, eta, blacklist, IP e VirusTotal.",
+        "- Cita i segnali principali: identita sito, contenuto, HTTPS, dominio, eta, blacklist, IP e VirusTotal.",
         "- Non dire mai che un sito e sicuro al 100%.",
         "- Chiudi con 2 consigli pratici.",
         "",
@@ -753,16 +796,16 @@ function creaPromptChatGemini(payload: GeminiChatPayload): string {
         "Rispondi alla domanda dell'utente sul sito analizzato.",
         "",
         "Obiettivo:",
-        "- Valutare se il sito, i prodotti o il venditore mostrano segnali di affidabilita o rischio.",
+        "- Valutare se il sito, l'organizzazione o il contenuto mostrano segnali di affidabilita o rischio.",
         "- Usare i dati tecnici SAFE-Shop e, quando serve, informazioni pubbliche aggiornate dal web tramite Google Search.",
-        "- Cercare segnali come recensioni ricorrenti, reclami, mancati rimborsi, prodotti contraffatti, societa proprietaria, contatti aziendali, pagine legali, notizie e possibili truffe.",
+        "- Cercare segnali come contatti, pagine informative, pagine legali, fonti esterne, recensioni quando pertinenti, reclami, notizie e possibili truffe.",
         "",
         "Regole di risposta:",
         "- Rispondi in italiano.",
         "- Se la domanda chiede una decisione, inizia con 'Risposta breve: si', 'Risposta breve: no' oppure 'Risposta breve: non abbastanza dati'.",
         "- Distingui tra dati certi e segnali non conclusivi.",
         "- Non accusare persone o aziende di truffa senza fonti solide; usa formule come 'segnale di rischio', 'da verificare', 'non confermato'.",
-        "- Non garantire mai che un acquisto sia sicuro al 100%.",
+        "- Non garantire mai che un sito sia sicuro o affidabile al 100%.",
         "- Chiudi con un consiglio pratico per l'utente.",
         "",
         "Dati SAFE-Shop:",
@@ -1038,7 +1081,7 @@ async function analizzaInfrastrutturaIp(hostname: string): Promise<IpInfo> {
             label: isPublic ? "IP valido" : "IP non pubblico",
             note: isPublic
                 ? "L'indirizzo IP inserito e valido e pubblico."
-                : "L'indirizzo IP inserito e privato, locale o riservato: non indica un negozio raggiungibile pubblicamente.",
+                : "L'indirizzo IP inserito e privato, locale o riservato: non indica un sito raggiungibile pubblicamente.",
             provider: null,
             usesCdn: false
         };
@@ -1080,7 +1123,7 @@ async function analizzaInfrastrutturaIp(hostname: string): Promise<IpInfo> {
             resolved: false,
             status: "WARNING",
             label: "IP non pubblico",
-            note: "Il dominio risolve solo verso IP privati o riservati: non sembra un negozio pubblico raggiungibile da Internet.",
+            note: "Il dominio risolve solo verso IP privati o riservati: non sembra un sito pubblico raggiungibile da Internet.",
             provider,
             usesCdn
         };
@@ -1094,7 +1137,7 @@ async function analizzaInfrastrutturaIp(hostname: string): Promise<IpInfo> {
             resolved: true,
             status: "OK",
             label: "CDN rilevata",
-            note: `Dominio raggiungibile tramite ${provider}. Protegge l'infrastruttura, ma non garantisce da sola l'affidabilita del negozio.`,
+            note: `Dominio raggiungibile tramite ${provider}. Protegge l'infrastruttura, ma non garantisce da sola l'affidabilita del sito.`,
             provider,
             usesCdn
         };
@@ -1597,13 +1640,6 @@ async function salvaAnalisi(
     const timestamp = new Date();
 
     try {
-        const existingStats = await trovaStatsEsistenti(hostname, score, timestamp);
-
-        if (existingStats) {
-            console.log("Salvataggio non necessario per hostname:", hostname);
-            return existingStats;
-        }
-
         console.log("💾 Inizio salvataggio per hostname:", hostname);
         console.log("✍️ Inserting in url_checks - hostname:", hostname, "score:", score);
 
@@ -1779,7 +1815,172 @@ function normalizzaData(value: unknown): Date | null {
     return Number.isNaN(date.getTime()) ? null : date;
 }
 
-function verificaUrl(url: string): UrlMetrics {
+async function analizzaContenutoSito(url: string): Promise<SiteContentInfo> {
+    try {
+        const response = await axios.get<string>(url, {
+            timeout: 8000,
+            responseType: "text",
+            maxContentLength: 450000,
+            headers: {
+                "User-Agent": "SAFE-Shop/1.0 (+site-safety-check)"
+            },
+            validateStatus: status => status >= 200 && status < 400
+        });
+
+        const html = typeof response.data == "string" ? response.data.slice(0, 450000) : "";
+
+        if (!html.trim()) {
+            return creaSiteContentInfoDefault("Il sito risponde, ma non restituisce testo analizzabile.");
+        }
+
+        return valutaContenutoHtml(html, url);
+    } catch {
+        return creaSiteContentInfoDefault("Pagina non raggiungibile o troppo lenta: controllo contenuto non conclusivo.");
+    }
+}
+
+function creaSiteContentInfoDefault(note: string): SiteContentInfo {
+    return {
+        checked: false,
+        reachable: false,
+        identityLabel: "Non verificata",
+        identityNote: note,
+        contentLabel: "Non verificato",
+        contentNote: "Senza contenuto leggibile il rischio testuale resta neutro.",
+        signals: [],
+        warnings: []
+    };
+}
+
+function valutaContenutoHtml(html: string, url: string): SiteContentInfo {
+    const plainText = estraiTestoPagina(html);
+    const searchable = (html + " " + plainText).toLowerCase();
+    const links = estraiLink(html);
+    const hasContact = contieneSegnale(searchable, links, [
+        "contact", "contatti", "contatto", "support", "assistenza", "help", "customer-service"
+    ]);
+    const hasAbout = contieneSegnale(searchable, links, [
+        "about", "chi-siamo", "chi siamo", "azienda", "team", "mission", "company"
+    ]);
+    const hasPrivacy = contieneSegnale(searchable, links, [
+        "privacy", "gdpr", "informativa"
+    ]);
+    const hasTerms = contieneSegnale(searchable, links, [
+        "terms", "termini", "condizioni", "legal", "legale", "disclaimer"
+    ]);
+    const hasEmail = /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i.test(plainText);
+    const hasSocial = /facebook\.com|instagram\.com|linkedin\.com|x\.com|twitter\.com|youtube\.com|tiktok\.com/i.test(html);
+    const hasStructuredOrg = /schema\.org\/(organization|localbusiness|person|webpage)|application\/ld\+json/i.test(html);
+    const hasTitle = /<title[^>]*>[^<]{8,}<\/title>/i.test(html);
+
+    const identitySignals = [
+        hasContact ? "contatti" : "",
+        hasAbout ? "presentazione" : "",
+        hasPrivacy ? "privacy" : "",
+        hasTerms ? "pagine legali" : "",
+        hasEmail ? "email" : "",
+        hasSocial ? "social" : "",
+        hasStructuredOrg ? "dati strutturati" : "",
+        hasTitle ? "titolo pagina" : ""
+    ].filter(Boolean);
+
+    let identityScore = 25;
+    if (hasContact) identityScore += 15;
+    if (hasAbout) identityScore += 15;
+    if (hasPrivacy) identityScore += 12;
+    if (hasTerms) identityScore += 12;
+    if (hasEmail) identityScore += 10;
+    if (hasSocial) identityScore += 8;
+    if (hasStructuredOrg) identityScore += 8;
+    if (hasTitle) identityScore += 5;
+
+    const contentWarnings = valutaWarningContenuto(searchable, links, url);
+    let contentScore = 82;
+    contentWarnings.forEach(warning => {
+        if (warning.includes("download")) contentScore -= 18;
+        else if (warning.includes("urgenza")) contentScore -= 12;
+        else if (warning.includes("credenziali")) contentScore -= 22;
+        else if (warning.includes("testo scarso")) contentScore -= 10;
+        else contentScore -= 15;
+    });
+
+    return {
+        checked: true,
+        reachable: true,
+        identityLabel: etichettaPunteggio(identityScore),
+        identityNote: identitySignals.length > 0
+            ? `Trovati segnali: ${identitySignals.slice(0, 4).join(", ")}.`
+            : "Non ho trovato contatti, presentazione o pagine legali evidenti.",
+        contentLabel: etichettaPunteggio(contentScore),
+        contentNote: contentWarnings.length > 0
+            ? `Da controllare: ${contentWarnings.slice(0, 3).join(", ")}.`
+            : "Nessun pattern testuale fortemente sospetto nella pagina iniziale.",
+        signals: identitySignals,
+        warnings: contentWarnings
+    };
+}
+
+function estraiTestoPagina(html: string): string {
+    return html
+        .replace(/<script[\s\S]*?<\/script>/gi, " ")
+        .replace(/<style[\s\S]*?<\/style>/gi, " ")
+        .replace(/<[^>]+>/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 120000);
+}
+
+function estraiLink(html: string): string[] {
+    const links: string[] = [];
+    const pattern = /<a\b[^>]*\bhref=["']?([^"'\s>]+)/gi;
+    let match: RegExpExecArray | null;
+
+    while ((match = pattern.exec(html)) && links.length < 250) {
+        links.push((match[1] || "").toLowerCase());
+    }
+
+    return links;
+}
+
+function contieneSegnale(searchable: string, links: string[], values: string[]): boolean {
+    return values.some(value => searchable.includes(value) || links.some(link => link.includes(value)));
+}
+
+function valutaWarningContenuto(searchable: string, links: string[], url: string): string[] {
+    const warnings: string[] = [];
+    const isHttp = url.startsWith("http://");
+
+    if (/hack|crack|keygen|warez|nulled|phishing|malware|stolen|counterfeit/i.test(searchable)) {
+        warnings.push("parole ad alto rischio");
+    }
+
+    if (/limited time|solo oggi|ultimi pezzi|winner|prize|gift|free money|guadagno garantito|offerta lampo/i.test(searchable)) {
+        warnings.push("pressione o urgenza commerciale");
+    }
+
+    if (links.some(link => /\.(exe|bat|msi|apk|dmg|scr|zip|rar|7z)(?:[?#]|$)/i.test(link))) {
+        warnings.push("link a download eseguibili o archivi");
+    }
+
+    if (isHttp && /type=["']?password/i.test(searchable)) {
+        warnings.push("richiesta credenziali senza HTTPS");
+    }
+
+    if (searchable.length < 700) {
+        warnings.push("testo scarso nella pagina iniziale");
+    }
+
+    return warnings;
+}
+
+function etichettaPunteggio(score: number): string {
+    const normalized = limitaPunteggio(score);
+    if (normalized >= 70) return "Buono";
+    if (normalized >= 40) return "Medio";
+    return "Debole";
+}
+
+function verificaUrl(url: string, ipInfo: IpInfo, siteInfo: SiteContentInfo): UrlMetrics {
     const https = url.startsWith("https://") ? 100 : 0;
     let dominio = 80;
 
@@ -1811,22 +2012,22 @@ function verificaUrl(url: string): UrlMetrics {
         dominio = 10;
     }
 
-    let recensioni = 50;
+    let strutturaUrl = 65;
 
     try {
         const parsed = new URL(url);
         const pathProfondo = parsed.pathname.split("/").filter(Boolean).length >= 2;
         const troppiParam = Array.from(parsed.searchParams.keys()).length > 4;
 
-        if (pathProfondo) recensioni += 10;
-        if (troppiParam) recensioni -= 15;
+        if (pathProfondo) strutturaUrl += 5;
+        if (troppiParam) strutturaUrl -= 15;
 
-        recensioni = limitaPunteggio(recensioni);
+        strutturaUrl = limitaPunteggio(strutturaUrl);
     } catch {
-        recensioni = 20;
+        strutturaUrl = 20;
     }
 
-    let reputazione = 60;
+    let rischioUrl = 75;
 
     try {
         const parsed = new URL(url);
@@ -1839,19 +2040,28 @@ function verificaUrl(url: string): UrlMetrics {
         const fileEseguibile = /\.(exe|bat|msi|dmg|apk|zip|rar|7z)$/i;
         const encodingSospetto = (fullUrl.match(/%[0-9a-f]{2}/gi) || []).length > 5;
 
-        if (https == 100) reputazione += 20;
-        if (paroleRosse.test(fullUrl)) reputazione -= 35;
-        if (paroleArancioni.test(pathname)) reputazione -= 15;
-        if (redirect.test(pathname)) reputazione -= 20;
-        if (fileEseguibile.test(pathname)) reputazione -= 25;
-        if (encodingSospetto) reputazione -= 15;
+        if (https == 100) rischioUrl += 5;
+        if (paroleRosse.test(fullUrl)) rischioUrl -= 35;
+        if (paroleArancioni.test(pathname)) rischioUrl -= 12;
+        if (redirect.test(pathname)) rischioUrl -= 20;
+        if (fileEseguibile.test(pathname)) rischioUrl -= 25;
+        if (encodingSospetto) rischioUrl -= 15;
 
-        reputazione = limitaPunteggio(reputazione);
+        rischioUrl = limitaPunteggio(rischioUrl);
     } catch {
-        reputazione = 10;
+        rischioUrl = 10;
     }
 
-    return { dominio, https, recensioni, reputazione };
+    const identita = calcolaPunteggioIdentita(siteInfo, strutturaUrl);
+    const rischioContenuti = calcolaPunteggioRischioContenuti(siteInfo, rischioUrl);
+
+    return {
+        dominio,
+        https,
+        recensioni: identita,
+        reputazione: rischioContenuti,
+        infrastruttura: calcolaPunteggioInfrastruttura(ipInfo)
+    };
 }
 
 function calcolaPunteggio(risultato: UrlMetrics, eta: number, virusTotal?: VirusTotalInfo): number {
@@ -1859,14 +2069,16 @@ function calcolaPunteggio(risultato: UrlMetrics, eta: number, virusTotal?: Virus
     const https = limitaPunteggio(risultato.https);
     const recensioni = limitaPunteggio(risultato.recensioni);
     const reputazione = limitaPunteggio(risultato.reputazione);
+    const infrastruttura = limitaPunteggio(risultato.infrastruttura);
     const etaNorm = limitaPunteggio(eta);
 
     let punteggio =
-        dominio * 0.25 +
-        https * 0.15 +
         recensioni * 0.20 +
         reputazione * 0.20 +
-        etaNorm * 0.20;
+        infrastruttura * 0.20 +
+        dominio * 0.15 +
+        etaNorm * 0.15 +
+        https * 0.10;
 
     if (virusTotal?.malicious && virusTotal.malicious > 0) {
         return 0;
@@ -1887,6 +2099,52 @@ function calcolaLivelloRischio(score: number): RiskLevel {
     if (score >= 70) return "LOW";
     if (score >= 40) return "MEDIUM";
     return "HIGH";
+}
+
+function calcolaPunteggioInfrastruttura(ipInfo: IpInfo): number {
+    if (!ipInfo.resolved) {
+        return 0;
+    }
+
+    if (ipInfo.usesCdn) {
+        return 90;
+    }
+
+    if (ipInfo.status == "OK") {
+        return 80;
+    }
+
+    return 40;
+}
+
+function calcolaPunteggioIdentita(siteInfo: SiteContentInfo, strutturaUrl: number): number {
+    if (!siteInfo.checked || !siteInfo.reachable) {
+        return Math.round(strutturaUrl * 0.45);
+    }
+
+    let score = 25 + siteInfo.signals.length * 10;
+
+    if (siteInfo.signals.includes("contatti")) score += 10;
+    if (siteInfo.signals.includes("presentazione")) score += 10;
+    if (siteInfo.signals.includes("privacy")) score += 8;
+    if (siteInfo.signals.includes("pagine legali")) score += 8;
+
+    return Math.round(limitaPunteggio(score));
+}
+
+function calcolaPunteggioRischioContenuti(siteInfo: SiteContentInfo, rischioUrl: number): number {
+    if (!siteInfo.checked || !siteInfo.reachable) {
+        return Math.round(rischioUrl * 0.7);
+    }
+
+    let score = rischioUrl;
+    score -= siteInfo.warnings.length * 10;
+
+    if (siteInfo.warnings.some(warning => warning.includes("alto rischio") || warning.includes("credenziali"))) {
+        score -= 15;
+    }
+
+    return Math.round(limitaPunteggio(score));
 }
 
 function limitaPunteggio(value: number): number {
