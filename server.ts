@@ -165,6 +165,7 @@ const googleCloudProject = process.env.GOOGLE_CLOUD_PROJECT
 const googleCloudLocation = process.env.GOOGLE_CLOUD_LOCATION || process.env.VERTEX_AI_LOCATION || "global";
 const geminiModelName = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 const geminiTimeoutMs = parsePositiveInteger(process.env.GEMINI_TIMEOUT_MS, 20000);
+const geminiChatMaxOutputTokens = parsePositiveInteger(process.env.GEMINI_CHAT_MAX_OUTPUT_TOKENS, 1800);
 
 let blacklist = new Set<string>();
 let db: Db | undefined;
@@ -617,8 +618,8 @@ async function generaRispostaChatGemini(payload: GeminiChatPayload): Promise<{ a
                 model: geminiModelName,
                 contents: prompt,
                 config: {
-                    systemInstruction: "Sei SAFE-Shop AI. Aiuti l'utente a valutare siti web con prudenza, dati tecnici e fonti web pubbliche. Non inventare prove, non diffamare aziende o persone, e distingui sempre tra fatto verificato, segnale di rischio e ipotesi.",
-                    maxOutputTokens: 1500,
+                    systemInstruction: "Sei SAFE-Shop AI. Aiuti l'utente a valutare siti web con prudenza. Rispondi in italiano con una risposta completa ma compatta, senza titoli markdown e senza liste lunghe. Non inventare prove, non diffamare aziende o persone, e distingui tra fatto verificato, segnale di rischio e ipotesi.",
+                    maxOutputTokens: geminiChatMaxOutputTokens,
                     temperature: 0.35,
                     tools: [{ googleSearch: {} } as never]
                 }
@@ -632,25 +633,24 @@ async function generaRispostaChatGemini(payload: GeminiChatPayload): Promise<{ a
             // Fallback: se googleSearch non restituisce testo (es. risposta solo con parti grounding),
             // riprova senza ricerca web (risposta sempre disponibile).
             console.warn("⚠️  Chat: risposta vuota con googleSearch, riprovo senza ricerca web.");
-            const fallback = await withTimeout(
-                client.models.generateContent({
-                    model: geminiModelName,
-                    contents: prompt,
-                    config: {
-                        systemInstruction: "Sei SAFE-Shop AI. Aiuti l'utente a valutare siti web con prudenza e dati tecnici. Non inventare prove e distingui tra fatto verificato, segnale di rischio e ipotesi.",
-                        maxOutputTokens: 1500,
-                        temperature: 0.35
-                    }
-                }),
-                geminiTimeoutMs
-            );
-            const fallbackAnswer = estraiTestoGemini(fallback);
+            const fallbackAnswer = await generaRispostaChatBreve(client, prompt);
 
             if (!fallbackAnswer) {
                 throw new Error("Il modello non ha generato testo. Verifica che il modello Gemini sia disponibile nella region Vertex AI configurata.");
             }
 
             return { answer: fallbackAnswer, sources: [] };
+        }
+
+        if (rispostaSembraTroncata(answer) || rispostaTroppoLunga(answer)) {
+            console.warn("⚠️  Chat: risposta apparentemente troncata, rigenero una versione breve.");
+            const completeAnswer = await generaRispostaChatBreve(client, prompt);
+
+            if (completeAnswer && !rispostaSembraTroncata(completeAnswer) && !rispostaTroppoLunga(completeAnswer)) {
+                return { answer: completeAnswer, sources: estraiFontiGemini(result) };
+            }
+
+            return { answer: creaRispostaChatLocale(payload), sources: estraiFontiGemini(result) };
         }
 
         return {
@@ -660,6 +660,70 @@ async function generaRispostaChatGemini(payload: GeminiChatPayload): Promise<{ a
     } catch (err) {
         throw new Error(creaMessaggioErroreGemini(err));
     }
+}
+
+async function generaRispostaChatBreve(client: GoogleGenAI, prompt: string): Promise<string> {
+    const fallbackPrompt = [
+        prompt,
+        "",
+        "Istruzione aggiuntiva:",
+        "Rispondi in 7-10 frasi complete. Non usare titoli markdown o liste lunghe. Non lasciare frasi sospese. Se mancano dati, dillo chiaramente e chiudi con un consiglio pratico."
+    ].join("\n");
+
+    const fallback = await withTimeout(
+        client.models.generateContent({
+            model: geminiModelName,
+            contents: fallbackPrompt,
+            config: {
+                systemInstruction: "Sei SAFE-Shop AI. Dai risposte complete ma compatte e prudenti sui siti web analizzati. Non inventare prove e distingui tra fatto verificato, segnale di rischio e ipotesi.",
+                maxOutputTokens: geminiChatMaxOutputTokens,
+                temperature: 0.25
+            }
+        }),
+        geminiTimeoutMs
+    );
+
+    return estraiTestoGemini(fallback);
+}
+
+function creaRispostaChatLocale(payload: GeminiChatPayload): string {
+    const score = Math.round(limitaPunteggio(payload.score));
+    const riskLabel = payload.riskLevel == "LOW" ? "basso" : payload.riskLevel == "MEDIUM" ? "medio" : "alto";
+    const decisione = score >= 70
+        ? "si, con cautela"
+        : score >= 40
+            ? "non abbastanza dati"
+            : "no, meglio evitarlo finche non fai altre verifiche";
+    const https = payload.results.https >= 70 ? "HTTPS e attivo" : "HTTPS non e pienamente positivo";
+    const blacklist = payload.results.blacklist ? "il sito risulta in blacklist" : "non risulta in blacklist";
+    const identita = payload.results.siteIdentityNote || "l'identita del sito non e stata valutata";
+    const contenuto = payload.results.siteContentNote || "il contenuto non e stato valutato";
+
+    return [
+        `Risposta breve: ${decisione}.`,
+        `SAFE-Shop assegna ${score}/100, quindi il rischio tecnico appare ${riskLabel}: ${https}, ${blacklist} e l'infrastruttura risulta ${payload.results.ipStatus}.`,
+        `Da verificare: ${identita}`,
+        `Sul contenuto: ${contenuto}`,
+        "Consiglio pratico: prima di fidarti, controlla contatti ufficiali, condizioni/legale e recensioni esterne recenti."
+    ].join("\n");
+}
+
+function rispostaSembraTroncata(text: string): boolean {
+    const trimmed = text.trim();
+
+    if (!trimmed) {
+        return true;
+    }
+
+    if (!/[.!?)]$/.test(trimmed)) {
+        return true;
+    }
+
+    return /\b(ma|pero|tuttavia|perche|poiche|con|senza|importanti|alcuni|questi|come|tra|di|del|della|dei|delle)$/i.test(trimmed);
+}
+
+function rispostaTroppoLunga(text: string): boolean {
+    return text.trim().length > 2600;
 }
 
 function getGeminiClient(): GoogleGenAI {
@@ -802,10 +866,14 @@ function creaPromptChatGemini(payload: GeminiChatPayload): string {
         "",
         "Regole di risposta:",
         "- Rispondi in italiano.",
+        "- Usa 7-10 frasi complete: abbastanza dettagliate da spiegare il perche, ma senza diventare un report lungo.",
+        "- Non usare titoli markdown, elenchi lunghi o sezioni separate.",
         "- Se la domanda chiede una decisione, inizia con 'Risposta breve: si', 'Risposta breve: no' oppure 'Risposta breve: non abbastanza dati'.",
         "- Distingui tra dati certi e segnali non conclusivi.",
+        "- Chiama i punteggi interni 'Identita sito' e 'Rischio contenuti', non 'recensioni' o 'reputazione'.",
         "- Non accusare persone o aziende di truffa senza fonti solide; usa formule come 'segnale di rischio', 'da verificare', 'non confermato'.",
         "- Non garantire mai che un sito sia sicuro o affidabile al 100%.",
+        "- Scrivi frasi complete e non lasciare la risposta sospesa.",
         "- Chiudi con un consiglio pratico per l'utente.",
         "",
         "Dati SAFE-Shop:",
