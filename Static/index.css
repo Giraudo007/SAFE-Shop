@@ -513,6 +513,15 @@ header {
   letter-spacing: 0.5px;
 }
 
+.stats-note {
+  grid-column: 1 / -1;
+  margin: 2px 4px 0;
+  color: var(--text-light);
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: center;
+}
+
 .ai-card {
   padding: 20px;
   margin-bottom: 32px;
