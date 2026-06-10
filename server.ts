@@ -1158,12 +1158,15 @@ async function analizzaInfrastrutturaIp(hostname: string): Promise<IpInfo> {
     // FIX 1: usa dnsHost (conserva www) per la risoluzione DNS.
     // Se il dominio nudo non ha record A (es. vallauri.edu) ma www.vallauri.edu sì,
     // la risoluzione va a buon fine invece di restituire un array vuoto.
-    const [ipv4, ipv6, cname] = await Promise.all([
+    const [resolvedIpv4, resolvedIpv6, cname, lookupIps] = await Promise.all([
         risolviRecordDns(() => dns.resolve4(dnsHost)),
         risolviRecordDns(() => dns.resolve6(dnsHost)),
-        risolviRecordDns(() => dns.resolveCname(dnsHost))
+        risolviRecordDns(() => dns.resolveCname(dnsHost)),
+        risolviLookupSistema(dnsHost)
     ]);
 
+    const ipv4 = unisciValoriUnici(resolvedIpv4, lookupIps.ipv4);
+    const ipv6 = unisciValoriUnici(resolvedIpv6, lookupIps.ipv6);
     const allIps = [...ipv4, ...ipv6];
     const hasPublicIp = allIps.some(isIpPubblico);
     const provider = identificaProviderInfrastruttura(cname, allIps);
@@ -1525,6 +1528,23 @@ async function risolviRecordDns<T>(resolver: () => Promise<T[]>): Promise<T[]> {
     } catch {
         return [];
     }
+}
+
+async function risolviLookupSistema(hostname: string): Promise<{ ipv4: string[]; ipv6: string[] }> {
+    try {
+        const records = await withTimeout(dns.lookup(hostname, { all: true, verbatim: false }), 5000);
+
+        return {
+            ipv4: records.filter(record => record.family == 4).map(record => record.address),
+            ipv6: records.filter(record => record.family == 6).map(record => record.address)
+        };
+    } catch {
+        return { ipv4: [], ipv6: [] };
+    }
+}
+
+function unisciValoriUnici<T>(...groups: T[][]): T[] {
+    return [...new Set(groups.flat())];
 }
 
 function identificaProviderInfrastruttura(cnameRecords: string[], ips: string[]): string | null {
@@ -2281,7 +2301,12 @@ function estraiDataCreazione(value: unknown): unknown {
         "createddate",
         "created",
         "domaincreated",
+        "domainrecordactivated",
+        "recordactivated",
+        "activated",
         "registered",
+        "registeredon",
+        "registrationtime",
         "registrationdate"
     ];
 
